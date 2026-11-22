@@ -21,6 +21,26 @@ VITE_APP_ENV=development
 
 Never place database passwords or private API keys in frontend files.
 
+## Supabase Auth
+
+Backend placeholders:
+
+```text
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+ADMIN_BOOTSTRAP_TOKEN=
+```
+
+Frontend placeholders:
+
+```text
+VITE_SUPABASE_URL=
+VITE_SUPABASE_ANON_KEY=
+```
+
+Custom SMTP is deferred until deployment. Supabase default email restrictions apply in development.
+
 ## Start
 
 ```bash
