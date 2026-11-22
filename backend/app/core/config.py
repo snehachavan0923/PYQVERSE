@@ -29,7 +29,6 @@ class Settings(BaseModel):
     SUPABASE_URL: str = Field(default_factory=lambda: os.getenv("SUPABASE_URL", ""))
     SUPABASE_ANON_KEY: str = Field(default_factory=lambda: os.getenv("SUPABASE_ANON_KEY", ""))
     SUPABASE_SERVICE_ROLE_KEY: str = Field(default_factory=lambda: os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
-    ADMIN_BOOTSTRAP_TOKEN: str = Field(default_factory=lambda: os.getenv("ADMIN_BOOTSTRAP_TOKEN", ""))
 
     @field_validator("DATABASE_URL")
     @classmethod

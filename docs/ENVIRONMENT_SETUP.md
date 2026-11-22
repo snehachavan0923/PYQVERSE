@@ -29,7 +29,10 @@ Backend placeholders:
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-ADMIN_BOOTSTRAP_TOKEN=
+
+# Optional non-secret inputs for scripts/provision_admin.py
+ADMIN_EMAIL=
+ADMIN_FULL_NAME=
 ```
 
 Frontend placeholders:
@@ -39,7 +42,7 @@ VITE_SUPABASE_URL=
 VITE_SUPABASE_ANON_KEY=
 ```
 
-Custom SMTP is deferred until deployment. Supabase default email restrictions apply in development.
+Authentication uses Supabase email/password with confirmation links. Custom SMTP is deferred until deployment. Supabase default email restrictions apply in development. Never store the administrator password in environment files; the provisioning script prompts securely.
 
 ## Start
 

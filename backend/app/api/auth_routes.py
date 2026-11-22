@@ -1,40 +1,40 @@
-import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import (
     bearer_token,
     create_supabase_anon_client,
-    normalize_admin_email,
+    log_supabase_auth_error,
     rate_limit,
     registration_error_response,
     validate_student_email,
-    verify_bootstrap_token,
 )
 from app.database.connection import get_db
 from app.models.academic import (
     AcademicScheme,
     Branch,
+    ElectiveBasket,
     ElectiveOption,
     Semester,
     StudentProfile,
     StudentSubjectEnrollment,
     Subject,
 )
+from app.models.document import PermissionStatus, QuestionPaper, UploadedDocument
+from app.models.question import ContentReview
+from app.models.syllabus import SyllabusDocument, SyllabusVersion, VerificationStatus
 from app.models.user import AccountStatus, User, UserRole
-from app.models.bootstrap import AdministratorBootstrapRecord
 from app.schemas.auth import (
-    BootstrapAdminRequest,
     LoginRequest,
     OnboardingRequest,
+    PasswordResetRequest,
     RefreshRequest,
     RegisterRequest,
-    SendOtpRequest,
-    VerifyOtpRequest,
 )
 from app.services.auth import require_role, synchronized_user
 
@@ -70,6 +70,104 @@ def session_payload(response):
     }
 
 
+def _profile_payload(db: Session, user: User) -> dict:
+    profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == user.id)).first()
+    return {
+        "id": str(user.id),
+        "role": user.role.value,
+        "onboarding_completed": bool(profile and profile.profile_completed),
+    }
+
+
+def _student_profile(db: Session, user: User) -> StudentProfile:
+    profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == user.id)).first()
+    if not profile:
+        raise HTTPException(status_code=409, detail="Student onboarding is required")
+    return profile
+
+
+def _enrolled_subjects(db: Session, profile: StudentProfile) -> list[Subject]:
+    enrollments = db.scalars(
+        select(StudentSubjectEnrollment).where(
+            StudentSubjectEnrollment.student_profile_id == profile.id,
+            StudentSubjectEnrollment.active.is_(True),
+        )
+    ).all()
+    subject_ids = [enrollment.subject_id for enrollment in enrollments]
+    if not subject_ids:
+        return []
+    subjects = db.scalars(
+        select(Subject).where(Subject.id.in_(subject_ids), Subject.active.is_(True))
+    ).all()
+    order = {subject_id: index for index, subject_id in enumerate(subject_ids)}
+    return sorted(subjects, key=lambda subject: order.get(subject.id, len(order)))
+
+
+def _subject_summaries(db: Session, profile: StudentProfile) -> list[dict]:
+    subjects = _enrolled_subjects(db, profile)
+    if not subjects:
+        return []
+    subject_ids = [subject.id for subject in subjects]
+
+    syllabus_rows = db.scalars(
+        select(SyllabusVersion.subject_id)
+        .join(SyllabusDocument, SyllabusDocument.syllabus_version_id == SyllabusVersion.id)
+        .where(
+            SyllabusVersion.subject_id.in_(subject_ids),
+            SyllabusVersion.active.is_(True),
+            SyllabusVersion.verification_status == VerificationStatus.VERIFIED,
+            SyllabusDocument.active.is_(True),
+            SyllabusDocument.verification_status == VerificationStatus.VERIFIED,
+        )
+    ).all()
+    subjects_with_syllabus = set(syllabus_rows)
+
+    pyq_rows = db.execute(
+        select(QuestionPaper.subject_id, func.count(QuestionPaper.id))
+        .join(UploadedDocument, UploadedDocument.id == QuestionPaper.uploaded_document_id)
+        .where(
+            QuestionPaper.subject_id.in_(subject_ids),
+            UploadedDocument.verification_status == VerificationStatus.VERIFIED,
+            UploadedDocument.permission_status == PermissionStatus.APPROVED,
+        )
+        .group_by(QuestionPaper.subject_id)
+    ).all()
+    pyq_counts = {row[0]: row[1] for row in pyq_rows}
+
+    semester_ids = {subject.semester_id for subject in subjects}
+    semesters = {
+        semester.id: semester
+        for semester in db.scalars(select(Semester).where(Semester.id.in_(semester_ids))).all()
+    }
+
+    summaries = []
+    for subject in subjects:
+        semester = semesters.get(subject.semester_id)
+        pyq_count = int(pyq_counts.get(subject.id, 0))
+        summaries.append({
+            "id": str(subject.id),
+            "code": subject.code,
+            "name": subject.name,
+            "subject_type": subject.subject_type,
+            "credits": subject.credits,
+            "semester": semester.name if semester else None,
+            "semester_number": semester.number if semester else None,
+            "syllabus_available": subject.id in subjects_with_syllabus,
+            "pyq_count": pyq_count,
+            "pyq_available": pyq_count > 0,
+            "learning_resources_available": False,
+            "learning_resource_count": 0,
+        })
+    return summaries
+
+
+def _count(db: Session, model, *criteria) -> int:
+    statement = select(func.count()).select_from(model)
+    if criteria:
+        statement = statement.where(*criteria)
+    return int(db.scalar(statement) or 0)
+
+
 @router.post("/register")
 def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     rate_limit(f"register:{request.client.host if request.client else 'unknown'}")
@@ -82,7 +180,7 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         response = client.auth.sign_up({
             "email": email,
             "password": payload.password,
-            "options": {"data": {"full_name": payload.full_name}},
+            "options": {"data": {"full_name": payload.full_name.strip()}},
         })
     except Exception as exc:
         raise registration_error_response(exc) from exc
@@ -97,7 +195,7 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
     confirmed = getattr(auth_user, "email_confirmed_at", None) or getattr(auth_user, "confirmed_at", None)
     user = User(
         supabase_auth_id=uuid.UUID(str(auth_id)),
-        full_name=payload.full_name,
+        full_name=payload.full_name.strip(),
         email=email,
         email_verified=bool(confirmed),
         role=UserRole.STUDENT,
@@ -113,51 +211,6 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
     }
 
 
-@router.post("/send-otp")
-def send_otp(payload: SendOtpRequest, request: Request):
-    rate_limit(f"otp:{payload.email}:{request.client.host if request.client else 'unknown'}")
-    email = validate_student_email(str(payload.email)) if payload.purpose == "signup" else str(payload.email).lower()
-    client = create_supabase_anon_client()
-    try:
-        if payload.purpose == "signup":
-            client.auth.sign_up({
-                "email": email,
-                "password": secrets.token_urlsafe(32),
-            })
-        else:
-            client.auth.sign_in_with_otp({"email": email})
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Unable to send verification OTP") from exc
-    return {"message": "If the email is permitted, a verification OTP will be sent"}
-
-
-@router.post("/verify-otp")
-def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depends(get_db)):
-    rate_limit(f"verify:{payload.email}:{request.client.host if request.client else 'unknown'}")
-    email = str(payload.email).lower()
-    client = create_supabase_anon_client()
-    otp_type = "signup" if payload.purpose == "signup" else "email"
-    try:
-        response = client.auth.verify_otp({"email": email, "token": payload.token, "type": otp_type})
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid or expired OTP") from exc
-
-    session = session_payload(response)
-    access_token = session["access_token"]
-    if not access_token:
-        raise HTTPException(status_code=401, detail="OTP verification did not create a session")
-    user, _ = synchronized_user(db, access_token)
-    profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == user.id)).first()
-    return {
-        **session,
-        "profile": {
-            "id": str(user.id),
-            "role": user.role.value,
-            "onboarding_completed": bool(profile and profile.profile_completed),
-        },
-    }
-
-
 @router.post("/login")
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     rate_limit(f"login:{payload.email}:{request.client.host if request.client else 'unknown'}")
@@ -166,20 +219,24 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     try:
         response = client.auth.sign_in_with_password({"email": email, "password": payload.password})
     except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid credentials") from exc
+        _, error_code = log_supabase_auth_error("login", exc)
+        if (error_code or "").lower() in {"email_not_confirmed", "email_not_verified"}:
+            raise HTTPException(
+                status_code=403,
+                detail="Please confirm your email before signing in.",
+            ) from exc
+        raise HTTPException(status_code=401, detail="Invalid email or password") from exc
 
     session = session_payload(response)
     if not session["access_token"]:
         raise HTTPException(status_code=401, detail="Login did not create a session")
     user, _ = synchronized_user(db, session["access_token"])
-    profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == user.id)).first()
+    user.last_login_at = datetime.now(timezone.utc)
+    db.add(user)
+    db.commit()
     return {
         **session,
-        "profile": {
-            "id": str(user.id),
-            "role": user.role.value,
-            "onboarding_completed": bool(profile and profile.profile_completed),
-        },
+        "profile": _profile_payload(db, user),
     }
 
 
@@ -197,59 +254,34 @@ def refresh(payload: RefreshRequest):
 def logout(access_token: str = Depends(bearer_token)):
     client = create_supabase_anon_client()
     try:
-        client.auth.sign_out(access_token)
+        client.auth.admin.sign_out(access_token)
     except Exception:
+        # Local session cleanup still proceeds on the client.
         pass
     return {"message": "Logged out"}
 
 
-@router.post("/bootstrap-admin")
-def bootstrap_admin(payload: BootstrapAdminRequest, request: Request, db: Session = Depends(get_db)):
-    rate_limit(f"bootstrap:{request.client.host if request.client else 'unknown'}", limit=3)
-    verify_bootstrap_token(payload.bootstrap_token)
-    if db.scalars(select(User).where(User.role == UserRole.ADMIN_FACULTY)).first():
-        raise HTTPException(status_code=409, detail="Administrator is already configured")
-
-    email = normalize_admin_email(str(payload.email))
+@router.post("/password-reset/request")
+def request_password_reset(payload: PasswordResetRequest, request: Request):
+    rate_limit(f"password-reset:{payload.email}:{request.client.host if request.client else 'unknown'}")
+    email = str(payload.email).lower()
     client = create_supabase_anon_client()
     try:
-        response = client.auth.sign_up({
-            "email": email,
-            "password": secrets.token_urlsafe(32),
-            "options": {"data": {"requested_role": "ADMIN_FACULTY"}},
-        })
+        client.auth.reset_password_for_email(
+            email,
+            {"redirect_to": f"{settings.FRONTEND_URL.rstrip('/')}/reset-password"},
+        )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Administrator verification could not be started") from exc
-
-    auth_user = getattr(response, "user", None)
-    if auth_user is None:
-        raise HTTPException(status_code=400, detail="Supabase did not create an identity")
-    user = User(
-        supabase_auth_id=uuid.UUID(str(auth_user.id)),
-        full_name=email,
-        email=email,
-        email_verified=False,
-        role=UserRole.ADMIN_FACULTY,
-        account_status=AccountStatus.ACTIVE,
-    )
-    db.add(user)
-    db.flush()
-    db.add(AdministratorBootstrapRecord(
-        email=email,
-        supabase_auth_id=user.supabase_auth_id,
-    ))
-    db.commit()
-    db.refresh(user)
+        # Always return the same message so account existence is not disclosed.
+        log_supabase_auth_error("password-reset", exc)
     return {
-        "message": "Administrator verification started",
-        "email": email,
-        "email_verification_pending": True,
+        "message": "If an account exists for this email, a password reset link has been sent.",
     }
 
 
 @router.get("/me")
 def me(access_token: str = Depends(bearer_token), db: Session = Depends(get_db)):
-    user, auth_user = synchronized_user(db, access_token)
+    user, _ = synchronized_user(db, access_token)
     profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == user.id)).first()
     return {
         "id": str(user.id),
@@ -375,37 +407,156 @@ def student_dashboard(
 ):
     user, _ = synchronized_user(db, access_token)
     require_role(user, UserRole.STUDENT)
-    profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == user.id)).first()
-    if not profile:
-        raise HTTPException(status_code=409, detail="Student onboarding is required")
+    profile = _student_profile(db, user)
 
     branch = db.get(Branch, profile.branch_id) if profile.branch_id else None
+    scheme = db.get(AcademicScheme, profile.academic_scheme_id) if profile.academic_scheme_id else None
     semester = db.get(Semester, profile.current_semester_id) if profile.current_semester_id else None
     elective = db.get(Subject, profile.selected_elective_id) if profile.selected_elective_id else None
-    enrollments = db.scalars(
-        select(StudentSubjectEnrollment).where(
-            StudentSubjectEnrollment.student_profile_id == profile.id,
-            StudentSubjectEnrollment.active.is_(True),
-        )
-    ).all()
-    subjects = [db.get(Subject, enrollment.subject_id) for enrollment in enrollments]
+    subjects = _subject_summaries(db, profile)
+
     return {
         "welcome_name": profile.student_name,
         "profile": {
             "usn": profile.usn,
             "department": branch.name if branch else None,
+            "branch": branch.name if branch else None,
+            "academic_scheme": scheme.name if scheme else None,
             "semester": semester.name if semester else None,
+            "semester_number": semester.number if semester else None,
             "selected_elective": elective.name if elective else None,
+            "enrollment_year": profile.enrollment_year,
             "onboarding_completed": profile.profile_completed,
         },
+        "academic_overview": {
+            "current_semester": semester.name if semester else None,
+            "enrolled_subjects": len(subjects),
+            "subjects_with_syllabus": sum(1 for item in subjects if item["syllabus_available"]),
+            "subjects_with_pyqs": sum(1 for item in subjects if item["pyq_available"]),
+            "learning_resources_available": False,
+        },
+        "subjects": subjects,
         "enrolled_subjects": [
-            {"id": str(subject.id), "code": subject.code, "name": subject.name}
-            for subject in subjects
-            if subject
+            {"id": item["id"], "code": item["code"], "name": item["name"]}
+            for item in subjects
         ],
-        "academic_preparation": {"status": "Ready", "progress_available": False},
+        "academic_preparation": {
+            "status": "Ready" if subjects else "Pending",
+            "progress_available": False,
+        },
         "progress": {"started_topics": 0, "completed_topics": 0, "bookmarked_topics": 0},
         "recent_activity": [],
+    }
+
+
+@router.get("/student/subjects")
+def student_subjects(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.STUDENT)
+    profile = _student_profile(db, user)
+    subjects = _subject_summaries(db, profile)
+    return {"subjects": subjects, "count": len(subjects)}
+
+
+@router.get("/student/syllabus")
+def student_syllabus(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.STUDENT)
+    profile = _student_profile(db, user)
+    subjects = _enrolled_subjects(db, profile)
+    if not subjects:
+        return {"documents": [], "count": 0}
+
+    subject_ids = [subject.id for subject in subjects]
+    subject_map = {subject.id: subject for subject in subjects}
+    rows = db.execute(
+        select(SyllabusVersion, SyllabusDocument)
+        .join(SyllabusDocument, SyllabusDocument.syllabus_version_id == SyllabusVersion.id)
+        .where(
+            SyllabusVersion.subject_id.in_(subject_ids),
+            SyllabusVersion.active.is_(True),
+            SyllabusVersion.verification_status == VerificationStatus.VERIFIED,
+            SyllabusDocument.active.is_(True),
+            SyllabusDocument.verification_status == VerificationStatus.VERIFIED,
+        )
+        .order_by(SyllabusVersion.subject_id, SyllabusVersion.version)
+    ).all()
+    documents = []
+    for version, document in rows:
+        subject = subject_map.get(version.subject_id)
+        documents.append({
+            "id": str(document.id),
+            "subject_id": str(version.subject_id),
+            "subject_code": subject.code if subject else None,
+            "subject_name": subject.name if subject else None,
+            "version": version.version,
+            "original_filename": document.original_filename,
+            "file_type": document.file_type,
+            "verification_status": version.verification_status.value,
+        })
+    return {"documents": documents, "count": len(documents)}
+
+
+@router.get("/student/pyqs")
+def student_pyqs(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.STUDENT)
+    profile = _student_profile(db, user)
+    subjects = _enrolled_subjects(db, profile)
+    if not subjects:
+        return {"question_papers": [], "count": 0}
+
+    subject_ids = [subject.id for subject in subjects]
+    subject_map = {subject.id: subject for subject in subjects}
+    papers = db.scalars(
+        select(QuestionPaper)
+        .join(UploadedDocument, UploadedDocument.id == QuestionPaper.uploaded_document_id)
+        .where(
+            QuestionPaper.subject_id.in_(subject_ids),
+            UploadedDocument.verification_status == VerificationStatus.VERIFIED,
+            UploadedDocument.permission_status == PermissionStatus.APPROVED,
+        )
+        .order_by(QuestionPaper.examination_year.desc(), QuestionPaper.exam_type)
+    ).all()
+    return {
+        "question_papers": [
+            {
+                "id": str(paper.id),
+                "subject_id": str(paper.subject_id),
+                "subject_code": subject_map[paper.subject_id].code if paper.subject_id in subject_map else None,
+                "subject_name": subject_map[paper.subject_id].name if paper.subject_id in subject_map else None,
+                "exam_type": paper.exam_type.value,
+                "cie_number": paper.cie_number,
+                "examination_year": paper.examination_year,
+            }
+            for paper in papers
+        ],
+        "count": len(papers),
+    }
+
+
+@router.get("/student/resources")
+def student_resources(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.STUDENT)
+    _student_profile(db, user)
+    return {
+        "available": False,
+        "resources": [],
+        "count": 0,
+        "message": "No learning resources uploaded yet.",
     }
 
 
@@ -416,17 +567,24 @@ def student_profile(
 ):
     user, _ = synchronized_user(db, access_token)
     require_role(user, UserRole.STUDENT)
-    profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == user.id)).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+    profile = _student_profile(db, user)
+    branch = db.get(Branch, profile.branch_id) if profile.branch_id else None
+    scheme = db.get(AcademicScheme, profile.academic_scheme_id) if profile.academic_scheme_id else None
+    semester = db.get(Semester, profile.current_semester_id) if profile.current_semester_id else None
+    elective = db.get(Subject, profile.selected_elective_id) if profile.selected_elective_id else None
     return {
         "id": str(profile.id),
         "student_name": profile.student_name,
+        "email": user.email,
         "usn": profile.usn,
         "branch_id": str(profile.branch_id) if profile.branch_id else None,
+        "branch": branch.name if branch else None,
         "academic_scheme_id": str(profile.academic_scheme_id) if profile.academic_scheme_id else None,
+        "academic_scheme": scheme.name if scheme else None,
         "current_semester_id": str(profile.current_semester_id) if profile.current_semester_id else None,
+        "semester": semester.name if semester else None,
         "selected_elective_id": str(profile.selected_elective_id) if profile.selected_elective_id else None,
+        "selected_elective": elective.name if elective else None,
         "enrollment_year": profile.enrollment_year,
         "profile_completed": profile.profile_completed,
     }
@@ -439,14 +597,221 @@ def admin_dashboard(
 ):
     user, _ = synchronized_user(db, access_token)
     require_role(user, UserRole.ADMIN_FACULTY)
-    subject_count = len(db.scalars(select(Subject)).all())
-    student_count = len(db.scalars(select(User).where(User.role == UserRole.STUDENT)).all())
-    semester_count = len(db.scalars(select(Semester)).all())
     return {
         "welcome_name": user.full_name,
         "profile": {"email": user.email, "role": user.role.value},
-        "catalog_overview": {"subjects": subject_count, "semesters": semester_count},
-        "user_overview": {"students": student_count},
-        "student_overview": {"students": student_count},
+        "catalog_overview": {
+            "subjects": _count(db, Subject),
+            "semesters": _count(db, Semester),
+            "branches": _count(db, Branch),
+            "academic_schemes": _count(db, AcademicScheme),
+        },
+        "user_overview": {
+            "students": _count(db, User, User.role == UserRole.STUDENT),
+            "administrators": _count(db, User, User.role == UserRole.ADMIN_FACULTY),
+        },
+        "document_overview": {
+            "uploaded_documents": _count(db, UploadedDocument),
+            "pyqs": _count(db, QuestionPaper),
+            "pending_reviews": _count(db, ContentReview, ContentReview.status == VerificationStatus.PENDING),
+        },
         "document_management_available": False,
+    }
+
+
+@router.get("/admin/academic/branches")
+def admin_branches(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.ADMIN_FACULTY)
+    branches = db.scalars(select(Branch).order_by(Branch.code)).all()
+    return [
+        {"id": str(item.id), "name": item.name, "code": item.code, "active": item.active}
+        for item in branches
+    ]
+
+
+@router.get("/admin/academic/schemes")
+def admin_schemes(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.ADMIN_FACULTY)
+    schemes = db.scalars(select(AcademicScheme).order_by(AcademicScheme.code)).all()
+    return [
+        {"id": str(item.id), "name": item.name, "code": item.code, "active": item.active}
+        for item in schemes
+    ]
+
+
+@router.get("/admin/academic/semesters")
+def admin_semesters(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.ADMIN_FACULTY)
+    semesters = db.scalars(select(Semester).order_by(Semester.number)).all()
+    return [
+        {"id": str(item.id), "number": item.number, "name": item.name, "active": item.active}
+        for item in semesters
+    ]
+
+
+@router.get("/admin/academic/subjects")
+def admin_subjects(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.ADMIN_FACULTY)
+    subjects = db.scalars(select(Subject).order_by(Subject.code)).all()
+    return [
+        {
+            "id": str(item.id),
+            "code": item.code,
+            "name": item.name,
+            "subject_type": item.subject_type,
+            "credits": item.credits,
+            "semester_id": str(item.semester_id),
+            "academic_scheme_id": str(item.academic_scheme_id),
+            "active": item.active,
+        }
+        for item in subjects
+    ]
+
+
+@router.get("/admin/academic/elective-options")
+def admin_elective_options(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.ADMIN_FACULTY)
+    rows = db.execute(
+        select(ElectiveBasket, ElectiveOption, Subject)
+        .join(ElectiveOption, ElectiveOption.basket_id == ElectiveBasket.id)
+        .join(Subject, Subject.id == ElectiveOption.subject_id)
+        .order_by(ElectiveBasket.name, Subject.code)
+    ).all()
+    return [
+        {
+            "basket_id": str(basket.id),
+            "basket_name": basket.name,
+            "subject_id": str(subject.id),
+            "subject_code": subject.code,
+            "subject_name": subject.name,
+            "active": basket.active and subject.active,
+        }
+        for basket, _option, subject in rows
+    ]
+
+
+@router.get("/admin/users")
+def admin_users(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    role: str | None = Query(default=None, pattern="^(STUDENT|ADMIN_FACULTY)$"),
+    search: str | None = Query(default=None, max_length=120),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.ADMIN_FACULTY)
+
+    filters = []
+    if role:
+        filters.append(User.role == UserRole(role))
+    if search:
+        pattern = f"%{search.strip()}%"
+        filters.append(User.email.ilike(pattern) | User.full_name.ilike(pattern))
+
+    total = _count(db, User, *filters)
+    users = db.scalars(
+        select(User)
+        .where(*filters)
+        .order_by(User.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+
+    items = []
+    for item in users:
+        profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == item.id)).first()
+        items.append({
+            "id": str(item.id),
+            "full_name": item.full_name,
+            "email": item.email,
+            "role": item.role.value,
+            "account_status": item.account_status.value,
+            "email_verified": item.email_verified,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+            "last_login_at": item.last_login_at.isoformat() if item.last_login_at else None,
+            "student_profile": {
+                "usn": profile.usn,
+                "profile_completed": profile.profile_completed,
+                "branch_id": str(profile.branch_id) if profile.branch_id else None,
+                "current_semester_id": str(profile.current_semester_id) if profile.current_semester_id else None,
+            } if profile else None,
+        })
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": max(1, (total + page_size - 1) // page_size),
+    }
+
+
+@router.get("/admin/users/{user_id}")
+def admin_user_detail(
+    user_id: uuid.UUID,
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    admin, _ = synchronized_user(db, access_token)
+    require_role(admin, UserRole.ADMIN_FACULTY)
+    item = db.get(User, user_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="User not found")
+    profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == item.id)).first()
+    branch = db.get(Branch, profile.branch_id) if profile and profile.branch_id else None
+    semester = db.get(Semester, profile.current_semester_id) if profile and profile.current_semester_id else None
+    return {
+        "id": str(item.id),
+        "full_name": item.full_name,
+        "email": item.email,
+        "role": item.role.value,
+        "account_status": item.account_status.value,
+        "email_verified": item.email_verified,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "last_login_at": item.last_login_at.isoformat() if item.last_login_at else None,
+        "student_profile": {
+            "usn": profile.usn,
+            "profile_completed": profile.profile_completed,
+            "branch": branch.name if branch else None,
+            "semester": semester.name if semester else None,
+            "enrollment_year": profile.enrollment_year,
+        } if profile else None,
+    }
+
+
+@router.get("/admin/profile")
+def admin_profile(
+    access_token: str = Depends(bearer_token),
+    db: Session = Depends(get_db),
+):
+    user, _ = synchronized_user(db, access_token)
+    require_role(user, UserRole.ADMIN_FACULTY)
+    return {
+        "id": str(user.id),
+        "full_name": user.full_name,
+        "email": user.email,
+        "role": user.role.value,
+        "account_status": user.account_status.value,
+        "email_verified": user.email_verified,
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }

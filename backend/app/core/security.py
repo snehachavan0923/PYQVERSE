@@ -1,7 +1,5 @@
-import hmac
 import logging
 import re
-import uuid
 from collections import defaultdict
 from time import monotonic
 
@@ -37,12 +35,31 @@ def normalize_admin_email(email: str) -> str:
     return normalized
 
 
+def validate_password_strength(password: str) -> str:
+    if len(password) < 8 or len(password) > 128:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be between 8 and 128 characters",
+        )
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(status_code=400, detail="Password must include an uppercase letter")
+    if not re.search(r"[a-z]", password):
+        raise HTTPException(status_code=400, detail="Password must include a lowercase letter")
+    if not re.search(r"[0-9]", password):
+        raise HTTPException(status_code=400, detail="Password must include a number")
+    return password
+
+
 def log_supabase_auth_error(operation: str, exc: Exception) -> tuple[int | None, str | None]:
     """Log only Supabase's safe error metadata; never stringify the exception."""
     raw_status = getattr(exc, "status", None)
     status_code = raw_status if isinstance(raw_status, int) else None
     raw_code = getattr(exc, "code", None)
-    code = str(raw_code)[:80] if raw_code is not None else None
+    code = (
+        raw_code
+        if isinstance(raw_code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", raw_code)
+        else None
+    )
     message = getattr(exc, "message", None)
     if not isinstance(message, str) or not message:
         message = "Supabase request failed"
@@ -50,22 +67,24 @@ def log_supabase_auth_error(operation: str, exc: Exception) -> tuple[int | None,
     for secret in (
         settings.SUPABASE_ANON_KEY,
         settings.SUPABASE_SERVICE_ROLE_KEY,
-        settings.ADMIN_BOOTSTRAP_TOKEN,
     ):
         if secret:
             message = message.replace(secret, "[redacted]")
     message = _JWT_PATTERN.sub("[redacted-token]", message)
     message = _EMAIL_PATTERN.sub("[redacted-email]", message)
     message = re.sub(
-        r"(?i)\b(password|otp|token|access[_ -]?token|refresh[_ -]?token)\b\s*[:=]\s*\S+",
+        r'''(?i)["']?\b(password|otp|token|access[_ -]?token|refresh[_ -]?token|api[_ -]?key|authorization)["']?\s*[:=]\s*["']?(?:bearer\s+)?[^,\s}"']+''',
         r"\1=[redacted]",
         message,
     )
+    message = re.sub(r"(?i)\b(authorization)\s+bearer\s+\S+", r"\1=[redacted]", message)
+    message = re.sub(r"\b\d{6,10}\b", "[redacted-code]", message)
     message = " ".join(message.split())[:240]
 
     logger.warning(
-        "Supabase auth request failed operation=%s status=%s code=%s message=%s",
+        "Supabase auth request failed operation=%s exception_class=%s status=%s code=%s message=%s",
         operation,
+        type(exc).__name__,
         status_code if status_code is not None else "unknown",
         code or "unknown",
         message,
@@ -106,19 +125,17 @@ def create_supabase_anon_client() -> Client:
 
 
 def create_supabase_service_client() -> Client:
-    if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_ROLE_KEY:
+    if (
+        not settings.SUPABASE_URL
+        or not settings.SUPABASE_SERVICE_ROLE_KEY
+        or "YOUR_" in settings.SUPABASE_URL
+        or "YOUR_" in settings.SUPABASE_SERVICE_ROLE_KEY
+    ):
         raise HTTPException(
             status_code=503,
             detail="Server-side Supabase administration is not configured.",
         )
     return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
-
-
-def verify_bootstrap_token(token: str) -> None:
-    if not settings.ADMIN_BOOTSTRAP_TOKEN or not hmac.compare_digest(
-        token, settings.ADMIN_BOOTSTRAP_TOKEN
-    ):
-        raise HTTPException(status_code=403, detail="Invalid administrator bootstrap token")
 
 
 def rate_limit(key: str, limit: int = 5, window_seconds: int = 300) -> None:
@@ -130,7 +147,12 @@ def rate_limit(key: str, limit: int = 5, window_seconds: int = 300) -> None:
     _rate_windows[key].append(now)
 
 
-def bearer_token(authorization: str = Header(...)) -> str:
+def bearer_token(authorization: str | None = Header(default=None)) -> str:
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid bearer token",
+        )
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(

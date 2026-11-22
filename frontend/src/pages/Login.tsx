@@ -7,16 +7,20 @@ import type { AuthSession } from '../types/auth'
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [otpMode, setOtpMode] = useState(false)
   const [error, setError] = useState('')
-  const [sent, setSent] = useState(false)
   const [loading, setLoading] = useState(false)
   const { setSession } = useAuth()
   const navigate = useNavigate()
 
   const enterSession = (session: AuthSession) => {
     setSession(session)
-    navigate(session.profile.role === 'ADMIN_FACULTY' ? '/admin' : session.profile.onboarding_completed ? '/student' : '/onboarding')
+    navigate(
+      session.profile.role === 'ADMIN_FACULTY'
+        ? '/admin'
+        : session.profile.onboarding_completed
+          ? '/student'
+          : '/onboarding',
+    )
   }
 
   const submit = async (event: FormEvent) => {
@@ -24,15 +28,11 @@ export default function Login() {
     setError('')
     setLoading(true)
     try {
-      if (otpMode) {
-        await api.post('/auth/send-otp', { email, purpose: 'login' })
-        setSent(true)
-      } else {
-        const response = await api.post<AuthSession>('/auth/login', { email, password })
-        enterSession(response.data)
-      }
-    } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Unable to complete sign in')
+      const response = await api.post<AuthSession>('/auth/login', { email, password })
+      enterSession(response.data)
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      setError(detail ?? 'Unable to sign in')
     } finally {
       setLoading(false)
     }
@@ -43,29 +43,37 @@ export default function Login() {
       <div className="brand-mark">PYQ</div>
       <p className="eyebrow">RVCE Academic Portal</p>
       <h1>Welcome back</h1>
-      <p className="muted">Sign in to your PYQVERSE workspace.</p>
-      {sent ? (
-        <button className="secondary-button" onClick={() => navigate('/verify-otp', { state: { email, purpose: 'login' } })}>
-          Enter OTP
+      <p className="muted">Sign in to your PYQVERSE workspace with your email and password.</p>
+      <form onSubmit={submit}>
+        <label>
+          Email
+          <input
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            required
+          />
+        </label>
+        <label>
+          Password
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
+          />
+        </label>
+        {error && <p className="form-error">{error}</p>}
+        <button className="primary-button" disabled={loading}>
+          {loading ? 'Signing in...' : 'Sign in'}
         </button>
-      ) : (
-        <form onSubmit={submit}>
-          <label>Email
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-          </label>
-          {!otpMode && (
-            <label>Password
-              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-            </label>
-          )}
-          {error && <p className="form-error">{error}</p>}
-          <button className="primary-button" disabled={loading}>{otpMode ? 'Send login OTP' : 'Sign in'}</button>
-        </form>
-      )}
-      <button className="text-button" onClick={() => { setOtpMode(!otpMode); setSent(false); setError('') }}>
-        {otpMode ? 'Use password instead' : 'Use email OTP instead'}
-      </button>
-      <p className="muted">New student? <Link to="/register">Create an account</Link></p>
+      </form>
+      <div className="auth-links">
+        <Link to="/forgot-password">Forgot password?</Link>
+        <Link to="/register">Create a student account</Link>
+      </div>
     </section>
   )
 }

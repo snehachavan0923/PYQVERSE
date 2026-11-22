@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 import { useAuth } from '../context/AuthContext'
 
+const CURRENT_YEAR = new Date().getFullYear()
+
 export default function Onboarding() {
   const { session, setSession } = useAuth()
   const navigate = useNavigate()
@@ -12,7 +14,7 @@ export default function Onboarding() {
   const [subjects, setSubjects] = useState<any[]>([])
   const [form, setForm] = useState({
     full_name: '', usn: '', branch_id: '', academic_scheme_id: '', semester_id: '',
-    selected_elective_id: '', enrollment_year: new Date().getFullYear(),
+    selected_elective_id: '', enrollment_year: CURRENT_YEAR,
   })
   const [error, setError] = useState('')
 

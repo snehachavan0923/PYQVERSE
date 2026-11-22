@@ -2,8 +2,8 @@
 
 AI-powered academic preparation platform initially designed for RVCE students.
 
-> **Status:** Phase 2 — Database foundation complete, subject to local DNS recovery.
-> Authentication, dashboards, uploads, AI tutor and quizzes remain for later phases.
+> **Status:** Phase 4 — Email/password authentication, secure admin provisioning and student/admin dashboards complete.
+> Uploads, OCR, AI tutor and quizzes remain for later phases.
 
 ---
 
@@ -297,12 +297,24 @@ Do not commit secrets. Use `.env.example` for shared defaults.
 
 ---
 
-## Phase 1 Scope
+## Current Scope
 
-Included: environment setup, project scaffolding, Tailwind/Router/Axios
-configuration, FastAPI app with `/` and `/health`, environment templates, Git
-initialization, and documentation.
+Included: environment setup, FastAPI backend, PostgreSQL/Supabase schema,
+Supabase email/password authentication, student registration and onboarding,
+secure one-time administrator provisioning, student dashboard, and
+admin/faculty dashboard with real catalog/user/document counts.
 
-Excluded (future phases): authentication, dashboards, question-paper uploads,
-AI tutor, quizzes, syllabus management, database schemas, external AI API
-integration, Docker, OCR/PDF pipelines.
+Excluded (future phases): numeric OTP authentication, document uploads, OCR/PDF
+pipelines, AI tutor, quizzes, and Docker.
+
+## Administrator Provisioning
+
+Run the backend-only script and enter the password at the secure prompt:
+
+```bash
+cd backend
+source .venv/bin/activate
+python scripts/provision_admin.py
+```
+
+Never commit administrator credentials. See `docs/SUPABASE_AUTH_SETUP.md`.

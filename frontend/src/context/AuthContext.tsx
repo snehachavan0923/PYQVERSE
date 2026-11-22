@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
 import api from '../services/api'
 import { supabase } from '../services/supabase'
 import type { AuthProfile, AuthSession } from '../types/auth'
@@ -13,38 +21,87 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+let sessionRestoreInFlight: Promise<AuthSession | null> | null = null
+
+function restoreStoredSession(): Promise<AuthSession | null> {
+  if (sessionRestoreInFlight) return sessionRestoreInFlight
+
+  const saved = localStorage.getItem('pyqverse_session')
+  if (!saved) return Promise.resolve(null)
+
+  const restore = (async () => {
+    try {
+      const previous = JSON.parse(saved) as AuthSession
+      if (!previous.refresh_token) return null
+
+      const refreshed = await api.post<Omit<AuthSession, 'profile'>>('/auth/refresh', {
+        refresh_token: previous.refresh_token,
+      })
+      const currentUser = await api.get<{
+        id: string
+        role: AuthProfile['role']
+        onboarding_completed: boolean
+      }>('/auth/me', {
+        headers: { Authorization: `Bearer ${refreshed.data.access_token}` },
+      })
+
+      return {
+        ...refreshed.data,
+        profile: {
+          id: currentUser.data.id,
+          role: currentUser.data.role,
+          onboarding_completed: currentUser.data.onboarding_completed,
+        },
+      }
+    } catch {
+      return null
+    }
+  })()
+
+  sessionRestoreInFlight = restore
+  void restore.finally(() => {
+    if (sessionRestoreInFlight === restore) sessionRestoreInFlight = null
+  })
+  return restore
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSessionState] = useState<AuthSession | null>(null)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    const saved = localStorage.getItem('pyqverse_session')
-    if (saved) {
-      try {
-        setSessionState(JSON.parse(saved))
-      } catch {
-        localStorage.removeItem('pyqverse_session')
-      }
-    }
-    setLoading(false)
-
-    if (!supabase) return
-    const { data } = supabase.auth.onAuthStateChange((_event, supabaseSession) => {
-      if (!supabaseSession) {
-        setSessionState(null)
-        localStorage.removeItem('pyqverse_session')
-      }
-    })
-    return () => data.subscription.unsubscribe()
-  }, [])
-
-  const setSession = (value: AuthSession | null) => {
+  const setSession = useCallback((value: AuthSession | null) => {
     setSessionState(value)
     if (value) localStorage.setItem('pyqverse_session', JSON.stringify(value))
     else localStorage.removeItem('pyqverse_session')
-  }
+  }, [])
 
-  const logout = async () => {
+  useEffect(() => {
+    let active = true
+
+    const restoreSession = async () => {
+      try {
+        const restored = await restoreStoredSession()
+        if (active) setSession(restored)
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+
+    void restoreSession()
+
+    if (!supabase) {
+      return () => { active = false }
+    }
+    const { data } = supabase.auth.onAuthStateChange((event, supabaseSession) => {
+      if (event === 'SIGNED_OUT' && !supabaseSession) setSession(null)
+    })
+    return () => {
+      active = false
+      data.subscription.unsubscribe()
+    }
+  }, [setSession])
+
+  const logout = useCallback(async () => {
     if (session?.access_token) {
       try {
         await api.post('/auth/logout', undefined, {
@@ -54,13 +111,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Clear the local session even if the server session has already expired.
       }
     }
-    await supabase?.auth.signOut()
-    setSession(null)
-  }
+    try {
+      await supabase?.auth.signOut()
+    } catch {
+      // The backend logout already ran; local state must still be cleared.
+    } finally {
+      setSession(null)
+    }
+  }, [session, setSession])
 
   const value = useMemo(
     () => ({ session, profile: session?.profile ?? null, loading, setSession, logout }),
-    [session, loading],
+    [session, loading, setSession, logout],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
