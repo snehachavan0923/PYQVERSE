@@ -22,3 +22,4 @@ from app.models.question import (
 )
 from app.models.syllabus import Subtopic, SyllabusDocument, SyllabusVersion, Topic, Unit
 from app.models.user import AccountStatus, User, UserRole
+from app.models.bootstrap import AdministratorBootstrapRecord

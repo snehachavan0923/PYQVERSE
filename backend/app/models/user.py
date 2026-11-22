@@ -23,13 +23,17 @@ class AccountStatus(str, enum.Enum):
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint("email ~ '@rvce\\.edu\\.in$'", name="ck_users_rvce_email"),
+        CheckConstraint(
+            "(role = 'ADMIN_FACULTY') OR (email ~ '@rvce\\.edu\\.in$')",
+            name="ck_users_role_email",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     email: Mapped[str] = mapped_column(String(254), unique=True, nullable=False)
     auth_provider_reference: Mapped[str | None] = mapped_column(String(255))
+    supabase_auth_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), unique=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False, default=UserRole.STUDENT)
     account_status: Mapped[AccountStatus] = mapped_column(

@@ -26,6 +26,10 @@ class Settings(BaseModel):
     APP_ENV: str = Field(default_factory=lambda: os.getenv("APP_ENV", "development"))
     APP_DEBUG: bool = Field(default_factory=lambda: os.getenv("APP_DEBUG", "true").lower() == "true")
     APP_SECRET_KEY: str = Field(default_factory=lambda: os.getenv("APP_SECRET_KEY", ""))
+    SUPABASE_URL: str = Field(default_factory=lambda: os.getenv("SUPABASE_URL", ""))
+    SUPABASE_ANON_KEY: str = Field(default_factory=lambda: os.getenv("SUPABASE_ANON_KEY", ""))
+    SUPABASE_SERVICE_ROLE_KEY: str = Field(default_factory=lambda: os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+    ADMIN_BOOTSTRAP_TOKEN: str = Field(default_factory=lambda: os.getenv("ADMIN_BOOTSTRAP_TOKEN", ""))
 
     @field_validator("DATABASE_URL")
     @classmethod

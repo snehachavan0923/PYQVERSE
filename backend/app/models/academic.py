@@ -14,6 +14,7 @@ class StudentProfile(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     student_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    usn: Mapped[str | None] = mapped_column(String(30), unique=True)
     branch_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("branches.id", ondelete="SET NULL"))
     academic_scheme_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("academic_schemes.id", ondelete="SET NULL"))
     current_semester_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("semesters.id", ondelete="SET NULL"))

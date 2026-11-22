@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db, test_database_connection
-from app.models.academic import Branch, Semester, Subject
+from app.models.academic import AcademicScheme, Branch, Semester, Subject
 from app.models.syllabus import Unit, Topic
 from app.schemas.academic import (
     BranchResponse,
@@ -37,6 +37,13 @@ def health_check() -> dict[str, str]:
 @router.get("/api/v1/academic/branches", response_model=list[BranchResponse])
 def list_branches(db: Session = Depends(get_db)):
     return db.scalars(select(Branch).where(Branch.active.is_(True)).order_by(Branch.code)).all()
+
+
+@router.get("/api/v1/academic/schemes")
+def list_schemes(db: Session = Depends(get_db)):
+    return db.scalars(
+        select(AcademicScheme).where(AcademicScheme.active.is_(True)).order_by(AcademicScheme.code)
+    ).all()
 
 
 @router.get("/api/v1/academic/semesters", response_model=list[SemesterResponse])
