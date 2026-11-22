@@ -11,6 +11,7 @@ from app.core.security import (
     create_supabase_anon_client,
     normalize_admin_email,
     rate_limit,
+    registration_error_response,
     validate_student_email,
     verify_bootstrap_token,
 )
@@ -84,7 +85,7 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
             "options": {"data": {"full_name": payload.full_name}},
         })
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Supabase registration failed") from exc
+        raise registration_error_response(exc) from exc
 
     auth_user = getattr(response, "user", None)
     if auth_user is None:

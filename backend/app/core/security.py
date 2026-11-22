@@ -1,15 +1,21 @@
 import hmac
+import logging
+import re
 import uuid
 from collections import defaultdict
 from time import monotonic
 
 from fastapi import Header, HTTPException, status
+from email_validator import EmailNotValidError, validate_email
 from supabase import Client, create_client
 
 from app.core.config import settings
 
 
 _rate_windows: dict[str, list[float]] = defaultdict(list)
+logger = logging.getLogger(__name__)
+_EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 
 
 def validate_student_email(email: str) -> str:
@@ -24,13 +30,74 @@ def validate_student_email(email: str) -> str:
 
 def normalize_admin_email(email: str) -> str:
     normalized = email.strip().lower()
-    if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
+    try:
+        normalized = validate_email(normalized, check_deliverability=False).normalized.lower()
+    except EmailNotValidError:
         raise HTTPException(status_code=400, detail="Invalid email address")
     return normalized
 
 
+def log_supabase_auth_error(operation: str, exc: Exception) -> tuple[int | None, str | None]:
+    """Log only Supabase's safe error metadata; never stringify the exception."""
+    raw_status = getattr(exc, "status", None)
+    status_code = raw_status if isinstance(raw_status, int) else None
+    raw_code = getattr(exc, "code", None)
+    code = str(raw_code)[:80] if raw_code is not None else None
+    message = getattr(exc, "message", None)
+    if not isinstance(message, str) or not message:
+        message = "Supabase request failed"
+
+    for secret in (
+        settings.SUPABASE_ANON_KEY,
+        settings.SUPABASE_SERVICE_ROLE_KEY,
+        settings.ADMIN_BOOTSTRAP_TOKEN,
+    ):
+        if secret:
+            message = message.replace(secret, "[redacted]")
+    message = _JWT_PATTERN.sub("[redacted-token]", message)
+    message = _EMAIL_PATTERN.sub("[redacted-email]", message)
+    message = re.sub(
+        r"(?i)\b(password|otp|token|access[_ -]?token|refresh[_ -]?token)\b\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        message,
+    )
+    message = " ".join(message.split())[:240]
+
+    logger.warning(
+        "Supabase auth request failed operation=%s status=%s code=%s message=%s",
+        operation,
+        status_code if status_code is not None else "unknown",
+        code or "unknown",
+        message,
+    )
+    return status_code, code
+
+
+def registration_error_response(exc: Exception) -> HTTPException:
+    status_code, code = log_supabase_auth_error("signup", exc)
+    normalized_code = (code or "").lower()
+    if normalized_code in {"user_already_exists", "email_exists", "user_exists"}:
+        return HTTPException(
+            status_code=409,
+            detail="An account with this email already exists or is pending verification.",
+        )
+    if status_code == 429 or "rate_limit" in normalized_code or "over_email_send_rate_limit" in normalized_code:
+        return HTTPException(status_code=429, detail="Email signup is temporarily rate limited. Try again later.")
+    if status_code is not None and status_code >= 500:
+        return HTTPException(status_code=503, detail="Supabase Auth is temporarily unavailable.")
+    return HTTPException(
+        status_code=400,
+        detail="Supabase rejected registration. Check Auth email settings and the backend's safe error log.",
+    )
+
+
 def create_supabase_anon_client() -> Client:
-    if not settings.SUPABASE_URL or not settings.SUPABASE_ANON_KEY:
+    if (
+        not settings.SUPABASE_URL
+        or not settings.SUPABASE_ANON_KEY
+        or "YOUR_" in settings.SUPABASE_URL
+        or "YOUR_" in settings.SUPABASE_ANON_KEY
+    ):
         raise HTTPException(
             status_code=503,
             detail="Supabase Auth is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY.",
