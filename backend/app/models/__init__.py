@@ -1,0 +1,24 @@
+from app.models.academic import (
+    AcademicScheme,
+    Branch,
+    College,
+    ElectiveBasket,
+    ElectiveOption,
+    Semester,
+    StudentProfile,
+    StudentSubjectEnrollment,
+    Subject,
+)
+from app.models.ai import AIInteraction
+from app.models.document import PermissionStatus, QuestionPaper, UploadedDocument
+from app.models.progress import Bookmark, QuizAttempt, StudentProgress, StudentTopicActivity
+from app.models.question import (
+    ContentReview,
+    DocumentPage,
+    Question,
+    QuestionOccurrence,
+    QuestionTopicMap,
+    Solution,
+)
+from app.models.syllabus import Subtopic, SyllabusDocument, SyllabusVersion, Topic, Unit
+from app.models.user import AccountStatus, User, UserRole

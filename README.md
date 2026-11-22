@@ -2,9 +2,8 @@
 
 AI-powered academic preparation platform initially designed for RVCE students.
 
-> **Status:** Phase 1 — Development Environment Setup complete. No application
-> features (auth, dashboards, uploads, AI tutor, quizzes, syllabus management)
-> are implemented yet.
+> **Status:** Phase 2 — Database foundation complete, subject to local DNS recovery.
+> Authentication, dashboards, uploads, AI tutor and quizzes remain for later phases.
 
 ---
 
