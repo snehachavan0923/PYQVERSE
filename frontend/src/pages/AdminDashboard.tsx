@@ -26,6 +26,12 @@ export default function AdminDashboard() {
         <article className="dashboard-card"><p>Subjects</p><h3>{dashboard.catalog_overview.subjects}</h3></article>
         <article className="dashboard-card"><p>Semesters</p><h3>{dashboard.catalog_overview.semesters}</h3></article>
         <article className="dashboard-card"><p>Students</p><h3>{dashboard.user_overview.students}</h3></article>
+        <article className="dashboard-card"><p>Administrators</p><h3>{dashboard.user_overview.administrators}</h3></article>
+        <article className="dashboard-card"><p>Branches</p><h3>{dashboard.catalog_overview.branches}</h3></article>
+        <article className="dashboard-card"><p>Academic schemes</p><h3>{dashboard.catalog_overview.schemes}</h3></article>
+        <article className="dashboard-card"><p>Uploaded documents</p><h3>{dashboard.content_overview.uploaded_documents}</h3></article>
+        <article className="dashboard-card"><p>PYQ papers</p><h3>{dashboard.content_overview.pyq_papers}</h3></article>
+        <article className="dashboard-card"><p>Pending reviews</p><h3>{dashboard.content_overview.pending_reviews}</h3></article>
       </div>
       <article className="dashboard-card wide"><h2>Academic document management</h2><p className="muted">Document uploads are available in a future phase.</p></article>
     </section>

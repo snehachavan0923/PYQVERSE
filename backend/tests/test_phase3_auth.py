@@ -6,6 +6,7 @@ from app.core.security import (
     log_supabase_auth_error,
     normalize_admin_email,
     registration_error_response,
+    password_login_error_response,
     validate_student_email,
 )
 from app.models.user import UserRole
@@ -53,6 +54,22 @@ def test_supabase_placeholder_configuration_returns_service_unavailable(monkeypa
     assert exc.value.status_code == 503
 
 
+def test_student_role_cannot_be_assigned_in_registration_payload():
+    request = RegisterRequest(
+        email="student@rvce.edu.in",
+        password="strong-password",
+        full_name="Student",
+    )
+    assert not hasattr(request, "role")
+
+
+def test_admin_email_is_separate_from_student_email():
+    admin = normalize_admin_email("faculty@gmail.com")
+    assert admin == "faculty@gmail.com"
+    with pytest.raises(HTTPException):
+        validate_student_email(admin)
+
+
 def test_public_role_is_fixed():
     assert UserRole.STUDENT.value == "STUDENT"
     assert set(role.value for role in UserRole) == {"STUDENT", "ADMIN_FACULTY"}
@@ -82,3 +99,22 @@ def test_supabase_signup_error_is_logged_safely(caplog):
     assert "hidden" not in caplog.text
     assert "eyJabc.def.ghi" not in caplog.text
     assert "admin.person@gmail.com" not in caplog.text
+
+
+def test_invalid_password_maps_to_safe_401():
+    error = AuthApiError("Invalid login credentials", 400, "invalid_credentials")
+    response = password_login_error_response(error)
+    assert response.status_code == 401
+    assert "Invalid email or password" in response.detail
+
+
+def test_supabase_unavailable_maps_to_503():
+    error = AuthApiError("Auth service unavailable", 503, "service_unavailable")
+    response = password_login_error_response(error)
+    assert response.status_code == 503
+
+
+def test_login_rate_limit_maps_to_429():
+    error = AuthApiError("Email rate limit exceeded", 429, "over_request_rate_limit")
+    response = password_login_error_response(error)
+    assert response.status_code == 429

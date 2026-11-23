@@ -59,3 +59,19 @@ def synchronized_user(db: Session, access_token: str) -> tuple[User, Any]:
 def require_role(user: User, role: UserRole) -> None:
     if user.role != role:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+
+def get_current_user(access_token: str, db: Session) -> tuple[User, Any]:
+    return synchronized_user(db, access_token)
+
+
+def require_student(access_token: str, db: Session) -> tuple[User, Any]:
+    user, auth_user = synchronized_user(db, access_token)
+    require_role(user, UserRole.STUDENT)
+    return user, auth_user
+
+
+def require_admin(access_token: str, db: Session) -> tuple[User, Any]:
+    user, auth_user = synchronized_user(db, access_token)
+    require_role(user, UserRole.ADMIN_FACULTY)
+    return user, auth_user

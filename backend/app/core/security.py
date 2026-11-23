@@ -91,6 +91,25 @@ def registration_error_response(exc: Exception) -> HTTPException:
     )
 
 
+def password_login_error_response(exc: Exception) -> HTTPException:
+    status_code, code = log_supabase_auth_error("password-login", exc)
+    normalized_code = (code or "").lower()
+    if status_code == 429 or "rate_limit" in normalized_code:
+        return HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
+    if status_code is not None and status_code >= 500:
+        return HTTPException(status_code=503, detail="Authentication service is temporarily unavailable.")
+    if normalized_code in {
+        "invalid_credentials",
+        "invalid_login_credentials",
+        "email_not_confirmed",
+        "missing",
+    }:
+        return HTTPException(status_code=401, detail="Invalid email or password.")
+    if "signup_disabled" in normalized_code:
+        return HTTPException(status_code=503, detail="Authentication service is unavailable.")
+    return HTTPException(status_code=401, detail="Authentication failed.")
+
+
 def create_supabase_anon_client() -> Client:
     if (
         not settings.SUPABASE_URL

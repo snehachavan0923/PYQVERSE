@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import api from '../services/api'
 import { useAuth } from '../context/AuthContext'
 import type { AuthSession } from '../types/auth'
+import { notification } from '../services/notification'
 
 export default function VerifyOtp() {
   const location = useLocation()
@@ -28,8 +29,10 @@ export default function VerifyOtp() {
       navigate(response.data.profile.role === 'ADMIN_FACULTY'
         ? '/admin'
         : response.data.profile.onboarding_completed ? '/student' : '/onboarding')
+      await notification.success('Email verified', 'Your account is ready.')
     } catch (err: any) {
       setError(err.response?.data?.detail ?? 'OTP verification failed')
+      await notification.error('Verification failed', err.response?.data?.detail ?? 'OTP verification failed')
     } finally {
       setLoading(false)
     }

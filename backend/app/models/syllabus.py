@@ -39,6 +39,10 @@ class SyllabusDocument(Base):
     file_size: Mapped[int | None] = mapped_column()
     verification_status: Mapped[VerificationStatus] = mapped_column(Enum(VerificationStatus, name="verification_status"), nullable=False, default=VerificationStatus.DRAFT)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    title: Mapped[str | None] = mapped_column(String(300))
+    description: Mapped[str | None] = mapped_column(Text)
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
 class Unit(Base):

@@ -39,6 +39,9 @@ class UploadedDocument(Base):
     source: Mapped[str | None] = mapped_column(Text)
     permission_status: Mapped[PermissionStatus] = mapped_column(Enum(PermissionStatus, name="permission_status"), nullable=False, default=PermissionStatus.PENDING)
     verification_status: Mapped[VerificationStatus] = mapped_column(Enum(VerificationStatus, name="verification_status"), nullable=False, default=VerificationStatus.DRAFT)
+    title: Mapped[str | None] = mapped_column(String(300))
+    description: Mapped[str | None] = mapped_column(Text)
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class QuestionPaper(Base):
@@ -51,3 +54,24 @@ class QuestionPaper(Base):
     exam_type: Mapped[ExamType] = mapped_column(Enum(ExamType, name="exam_type"), nullable=False)
     cie_number: Mapped[int | None] = mapped_column(Integer)
     examination_year: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String(300))
+    description: Mapped[str | None] = mapped_column(Text)
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class LearningResource(Base):
+    __tablename__ = "learning_resources"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False)
+    semester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("semesters.id", ondelete="CASCADE"), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    uploaded_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("CURRENT_TIMESTAMP"))

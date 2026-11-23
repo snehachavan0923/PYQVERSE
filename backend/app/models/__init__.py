@@ -10,7 +10,7 @@ from app.models.academic import (
     Subject,
 )
 from app.models.ai import AIInteraction
-from app.models.document import PermissionStatus, QuestionPaper, UploadedDocument
+from app.models.document import LearningResource, PermissionStatus, QuestionPaper, UploadedDocument
 from app.models.progress import Bookmark, QuizAttempt, StudentProgress, StudentTopicActivity
 from app.models.question import (
     ContentReview,
