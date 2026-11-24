@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import ThemeToggle from '../components/ThemeToggle'
 import { useAuth } from '../context/AuthContext'
+import notifications from '../services/notification'
 
 interface NavItem {
   label: string
@@ -37,6 +38,15 @@ export default function DashboardLayout({ role }: { role: 'STUDENT' | 'ADMIN_FAC
   const navigation = role === 'ADMIN_FACULTY' ? adminNavigation : studentNavigation
   const roleLabel = role === 'ADMIN_FACULTY' ? 'Admin / Faculty' : 'Student'
 
+  const confirmLogout = async () => {
+    const confirmed = await notifications.confirm({
+      title: 'Log out of PYQVERSE?',
+      text: 'You will need to sign in again to access your workspace.',
+      confirmText: 'Log out',
+    })
+    if (confirmed) await logout()
+  }
+
   return (
     <div className="dashboard-layout">
       <aside className={`sidebar${menuOpen ? ' sidebar-open' : ''}`}>
@@ -62,7 +72,7 @@ export default function DashboardLayout({ role }: { role: 'STUDENT' | 'ADMIN_FAC
         </nav>
         <div className="sidebar-footer">
           <span className="sidebar-email">{session?.user.email}</span>
-          <button className="secondary-button" type="button" onClick={() => void logout()}>
+          <button className="secondary-button" type="button" onClick={() => void confirmLogout()}>
             Log out
           </button>
         </div>

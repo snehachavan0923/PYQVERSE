@@ -34,6 +34,8 @@ class SyllabusDocument(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     syllabus_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("syllabus_versions.id", ondelete="CASCADE"), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(300))
+    description: Mapped[str | None] = mapped_column(Text)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     file_type: Mapped[str] = mapped_column(String(30), nullable=False)
     file_size: Mapped[int | None] = mapped_column()

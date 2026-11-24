@@ -9,6 +9,7 @@ import ResetPassword from '../pages/ResetPassword'
 import Onboarding from '../pages/Onboarding'
 import StudentDashboard from '../pages/StudentDashboard'
 import StudentSubjects from '../pages/StudentSubjects'
+import StudentSubjectDetail from '../pages/StudentSubjectDetail'
 import StudentSyllabus from '../pages/StudentSyllabus'
 import StudentPyqs from '../pages/StudentPyqs'
 import StudentResources from '../pages/StudentResources'
@@ -19,7 +20,8 @@ import AdminAcademic from '../pages/AdminAcademic'
 import AdminUsers from '../pages/AdminUsers'
 import AdminProfile from '../pages/AdminProfile'
 import AdminSettings from '../pages/AdminSettings'
-import AdminPlaceholder from '../pages/AdminPlaceholder'
+import AdminContentManager from '../pages/AdminContentManager'
+import AdminUploads from '../pages/AdminUploads'
 import { useAuth } from '../context/AuthContext'
 
 function RootRedirect() {
@@ -49,6 +51,7 @@ export default function AppRoutes() {
         <Route element={<DashboardLayout role="STUDENT" />}>
           <Route path="/student" element={<StudentDashboard />} />
           <Route path="/student/subjects" element={<StudentSubjects />} />
+          <Route path="/student/subjects/:subjectId" element={<StudentSubjectDetail />} />
           <Route path="/student/syllabus" element={<StudentSyllabus />} />
           <Route path="/student/pyqs" element={<StudentPyqs />} />
           <Route path="/student/resources" element={<StudentResources />} />
@@ -62,10 +65,10 @@ export default function AppRoutes() {
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/admin/academic" element={<AdminAcademic />} />
           <Route path="/admin/users" element={<AdminUsers />} />
-          <Route path="/admin/syllabus" element={<AdminPlaceholder title="Syllabus Management" description="Syllabus upload, versioning and review workflows will be implemented in a later phase." />} />
-          <Route path="/admin/pyqs" element={<AdminPlaceholder title="PYQ Management" description="Question paper upload, OCR and verification workflows will be implemented in a later phase." />} />
-          <Route path="/admin/resources" element={<AdminPlaceholder title="Learning Resource Management" description="Learning resource uploads will be implemented in a later phase." />} />
-          <Route path="/admin/uploads" element={<AdminPlaceholder title="Upload Management" description="Bulk upload and document-processing workflows will be implemented in a later phase." />} />
+          <Route path="/admin/syllabus" element={<AdminContentManager kind="syllabus" />} />
+          <Route path="/admin/pyqs" element={<AdminContentManager kind="pyq" />} />
+          <Route path="/admin/resources" element={<AdminContentManager kind="resource" />} />
+          <Route path="/admin/uploads" element={<AdminUploads />} />
           <Route path="/admin/profile" element={<AdminProfile />} />
           <Route path="/admin/settings" element={<AdminSettings />} />
         </Route>

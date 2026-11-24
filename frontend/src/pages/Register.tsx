@@ -1,7 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import api from '../services/api'
+import { friendlyError } from '../services/errors'
+import notifications from '../services/notification'
 import { useAuth } from '../context/AuthContext'
+import PasswordField from '../components/PasswordField'
 import type { AuthSession } from '../types/auth'
 
 interface RegisterResponse extends Partial<AuthSession> {
@@ -25,6 +28,7 @@ export default function Register() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (loading) return
     setError('')
 
     if (!form.email.trim().toLowerCase().endsWith('@rvce.edu.in')) {
@@ -56,19 +60,14 @@ export default function Register() {
           user: data.user,
           profile: data.profile,
         })
-        navigate('/onboarding')
+        void notifications.toast('success', 'Student account created')
+        navigate('/onboarding', { replace: true })
         return
       }
+      void notifications.toast('success', 'Confirmation email sent')
       setSubmittedEmail(form.email.trim())
     } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: string | { msg?: string }[] } } }).response?.data?.detail
-      if (typeof detail === 'string') {
-        setError(detail)
-      } else if (Array.isArray(detail) && detail.length > 0) {
-        setError(detail[0]?.msg ?? 'Unable to register')
-      } else {
-        setError('Unable to register')
-      }
+      void notifications.error('Registration failed', friendlyError(err, 'Unable to register'))
     } finally {
       setLoading(false)
     }
@@ -119,32 +118,26 @@ export default function Register() {
             required
           />
         </label>
-        <label>
-          Password
-          <input
-            type="password"
-            autoComplete="new-password"
-            minLength={8}
-            value={form.password}
-            onChange={(event) => setForm({ ...form, password: event.target.value })}
-            required
-          />
-        </label>
-        <label>
-          Confirm password
-          <input
-            type="password"
-            autoComplete="new-password"
-            minLength={8}
-            value={form.confirmPassword}
-            onChange={(event) => setForm({ ...form, confirmPassword: event.target.value })}
-            required
-          />
-        </label>
+        <PasswordField
+          label="Password"
+          autoComplete="new-password"
+          value={form.password}
+          onChange={(value) => setForm({ ...form, password: value })}
+          minLength={8}
+          required
+        />
+        <PasswordField
+          label="Confirm password"
+          autoComplete="new-password"
+          value={form.confirmPassword}
+          onChange={(value) => setForm({ ...form, confirmPassword: value })}
+          minLength={8}
+          required
+        />
         <p className="form-hint">{PASSWORD_POLICY}</p>
         {error && <p className="form-error">{error}</p>}
         <button className="primary-button" disabled={loading}>
-          {loading ? 'Creating account...' : 'Create account'}
+          {loading ? 'Creating account…' : 'Create account'}
         </button>
       </form>
       <p className="muted">

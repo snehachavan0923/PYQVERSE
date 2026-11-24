@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 
 type Theme = 'light' | 'dark'
 
@@ -11,7 +11,7 @@ function initialTheme(): Theme {
 export default function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(initialTheme)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('pyqverse_theme', theme)
   }, [theme])
