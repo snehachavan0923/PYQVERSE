@@ -254,6 +254,7 @@ def admin_update_syllabus(
     version = db.get(SyllabusVersion, document.syllabus_version_id)
     if version is None:
         raise HTTPException(status_code=404, detail="Syllabus version not found")
+    previous_status = document.verification_status
     data = payload.model_dump(exclude_unset=True)
     if "title" in data:
         document.title = clean_text(data["title"], field="Title", max_length=300)
@@ -263,6 +264,9 @@ def admin_update_syllabus(
         publication = _status(str(data["status"]))
         document.verification_status = publication
         version.verification_status = publication
+        if publication == VerificationStatus.VERIFIED and previous_status != VerificationStatus.VERIFIED:
+            document.active = True
+            version.active = True
     if "active" in data and data["active"] is not None:
         document.active = bool(data["active"])
         version.active = bool(data["active"])
@@ -433,6 +437,7 @@ def admin_update_pyq(
     document = db.get(UploadedDocument, paper.uploaded_document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Question paper file record not found")
+    previous_status = document.verification_status
     data = payload.model_dump(exclude_unset=True)
     if "title" in data:
         paper.title = clean_text(data["title"], field="Title", max_length=300)
@@ -446,6 +451,8 @@ def admin_update_pyq(
         document.permission_status = (
             PermissionStatus.APPROVED if publication == VerificationStatus.VERIFIED else PermissionStatus.PENDING
         )
+        if publication == VerificationStatus.VERIFIED and previous_status != VerificationStatus.VERIFIED:
+            document.active = True
     if "active" in data and data["active"] is not None:
         document.active = bool(data["active"])
     db.commit()
@@ -561,6 +568,7 @@ def admin_update_resource(
     resource = db.get(LearningResource, resource_id)
     if resource is None:
         raise HTTPException(status_code=404, detail="Learning resource not found")
+    previous_status = resource.verification_status
     data = payload.model_dump(exclude_unset=True)
     if "title" in data:
         resource.title = clean_text(data["title"], field="Title", max_length=300, required=True)
@@ -572,7 +580,10 @@ def admin_update_resource(
             raise HTTPException(status_code=422, detail="Invalid resource type")
         resource.resource_type = normalized_type
     if "status" in data and data["status"] is not None:
-        resource.verification_status = _status(str(data["status"]))
+        publication = _status(str(data["status"]))
+        resource.verification_status = publication
+        if publication == VerificationStatus.VERIFIED and previous_status != VerificationStatus.VERIFIED:
+            resource.active = True
     if "active" in data and data["active"] is not None:
         resource.active = bool(data["active"])
     resource.updated_at = datetime.utcnow()

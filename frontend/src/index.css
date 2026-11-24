@@ -261,6 +261,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .tag-published { color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent); }
 .tag-draft { color: var(--muted); }
 .tag-danger { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.tag-archived { color: var(--muted); background: var(--surface-muted); border: 1px solid var(--border); }
+.state-detail { color: var(--muted); font-size: 11px; }
 .link-button { border: 0; background: transparent; color: var(--primary); font: inherit; font-weight: 800; cursor: pointer; padding: 4px 0; }
 .subject-card-link { color: inherit; text-decoration: none; }
 .subject-card-link:focus-visible .subject-card, .subject-card:hover { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }

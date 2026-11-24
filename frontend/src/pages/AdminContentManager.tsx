@@ -77,7 +77,17 @@ const ACCEPT: Record<ContentKind, string> = {
   resource: '.pdf,.docx',
 }
 
-function statusTag(status: string) {
+function stateTags(status: string, active: boolean) {
+  if (!active) {
+    return (
+      <>
+        <span className="tag tag-archived">Archived</span>
+        <span className="state-detail">
+          Publication: {status === 'VERIFIED' ? 'Published' : status}
+        </span>
+      </>
+    )
+  }
   if (status === 'VERIFIED') return <span className="tag tag-published">Published</span>
   if (status === 'REJECTED') return <span className="tag tag-danger">Rejected</span>
   return <span className="tag tag-draft">{status}</span>
@@ -105,7 +115,11 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   const [saving, setSaving] = useState(false)
   const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
   const [editing, setEditing] = useState<ContentItem | null>(null)
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch] = useState('')
   const [filterSubjectId, setFilterSubjectId] = useState('')
+  const [filterStatus, setFilterStatus] = useState('')
+  const [filterArchive, setFilterArchive] = useState('')
 
   const activeSubjects = useMemo(() => subjects.filter((item) => item.active), [subjects])
 
@@ -230,17 +244,41 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   const submitEdit = async (event: FormEvent) => {
     event.preventDefault()
     if (!editing || saving) return
+    const archived = editing.active === false
+    const statusChanged = editForm.status !== editing.verification_status
     const body: Record<string, unknown> = {
       title: editForm.title.trim(),
       description: editForm.description.trim() || null,
       status: editForm.status,
     }
     if (kind === 'resource') body.resource_type = editForm.resource_type
+    if (archived && statusChanged) {
+      const restore = await notifications.confirm({
+        title: 'Restore this archived item?',
+        text: 'Changing the publication status of an archived item. Restore it to make it active, or keep it archived.',
+        confirmText: 'Restore and save',
+        cancelText: 'Keep archived',
+      })
+      body.active = restore
+    }
     const ok = await run(
       () => updateAdminContent(session, kind, editing.id, body),
       'Content updated',
     )
     if (ok) setEditing(null)
+  }
+
+  const publish = async (item: ContentItem) => {
+    const confirmed = await notifications.confirm({
+      title: 'Publish this item?',
+      text: 'Published content becomes available to students enrolled in the subject and reactivates archived items.',
+      confirmText: 'Publish',
+    })
+    if (!confirmed) return
+    await run(
+      () => updateAdminContent(session, kind, item.id, { status: 'VERIFIED', active: true }),
+      'Content published',
+    )
   }
 
   const toggleActive = async (item: ContentItem) => {
@@ -299,13 +337,85 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
 
   const filtered = useMemo(() => {
     if (!items) return []
-    if (!filterSubjectId) return items
-    return items.filter((item) => item.subject_id === filterSubjectId)
-  }, [items, filterSubjectId])
+    const needle = search.trim().toLowerCase()
+    return items.filter((item) => {
+      if (filterSubjectId && item.subject_id !== filterSubjectId) return false
+      if (filterStatus && item.verification_status !== filterStatus) return false
+      if (filterArchive === 'active' && item.active === false) return false
+      if (filterArchive === 'archived' && item.active !== false) return false
+      if (
+        needle &&
+        !`${titleOf(item)} ${item.original_filename} ${item.subject_code ?? ''} ${item.subject_name ?? ''}`
+          .toLowerCase()
+          .includes(needle)
+      ) {
+        return false
+      }
+      return true
+    })
+  }, [items, search, filterSubjectId, filterStatus, filterArchive])
+
+  const clearFilters = () => {
+    setSearchInput('')
+    setSearch('')
+    setFilterSubjectId('')
+    setFilterStatus('')
+    setFilterArchive('')
+  }
 
   return (
     <section className="dashboard-page">
       <PageHeader eyebrow={copy.eyebrow} title={copy.title} description={copy.description} />
+
+      <form
+        className="filter-bar"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setSearch(searchInput.trim())
+        }}
+      >
+        <label>
+          Search
+          <input
+            type="search"
+            placeholder="Title or filename"
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </label>
+        <label>
+          Subject
+          <select value={filterSubjectId} onChange={(event) => setFilterSubjectId(event.target.value)}>
+            <option value="">All subjects</option>
+            {subjects.map((subject) => (
+              <option key={subject.id} value={subject.id}>
+                {subject.code} — {subject.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Publication status
+          <select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)}>
+            <option value="">All statuses</option>
+            {STATUS_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Archive state
+          <select value={filterArchive} onChange={(event) => setFilterArchive(event.target.value)}>
+            <option value="">All states</option>
+            <option value="active">Active</option>
+            <option value="archived">Archived</option>
+          </select>
+        </label>
+        <button className="primary-button compact-button" type="submit">Search</button>
+        <button className="secondary-button compact-button" type="button" onClick={clearFilters}>
+          Clear filters
+        </button>
+      </form>
 
       <div className="two-column-grid">
         <form className="editor-panel" onSubmit={submitUpload}>
@@ -492,22 +602,10 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
           <article className="editor-panel">
             <h2>Manage {kind === 'pyq' ? 'question papers' : kind === 'syllabus' ? 'syllabus documents' : 'resources'}</h2>
             <p className="muted">
-              Select a subject filter to narrow the list. Only published items are visible to students.
+              Use the filters above to find content. Archived items remain stored and can be restored;
+              only published active items are visible to students.
             </p>
-            <label>
-              Filter by subject
-              <select
-                value={filterSubjectId}
-                onChange={(event) => setFilterSubjectId(event.target.value)}
-              >
-                <option value="">All subjects</option>
-                {subjects.map((subject) => (
-                  <option key={subject.id} value={subject.id}>
-                    {subject.code} — {subject.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <p className="metric-note">Showing {filtered.length} of {items?.length ?? 0} items</p>
           </article>
         )}
       </div>
@@ -531,14 +629,23 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
                     {!isPyq(item) && !isResource(item) && item.version ? ` · Version ${item.version}` : ''}
                   </p>
                   <div className="content-meta">
-                    {statusTag(item.verification_status)}
-                    {active ? null : <span className="tag tag-danger">Archived</span>}
+                    {stateTags(item.verification_status, active)}
                     <span>{item.file_type.toUpperCase()}</span>
                     <span>{item.original_filename}</span>
                   </div>
                 </div>
                 <div className="content-item-side">
                   <div className="row-actions">
+                    {item.verification_status === 'VERIFIED' ? null : (
+                      <button
+                        className="primary-button compact-button"
+                        type="button"
+                        disabled={saving}
+                        onClick={() => void publish(item)}
+                      >
+                        Publish
+                      </button>
+                    )}
                     <button className="secondary-button compact-button" type="button" onClick={() => startEdit(item)}>
                       Edit
                     </button>
@@ -569,7 +676,7 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
           title="No content found"
           description={
             items.length
-              ? 'No uploaded items match the selected subject filter.'
+              ? 'No uploaded items match the current search and filters.'
               : 'Use the upload form to add the first document.'
           }
         />

@@ -58,6 +58,13 @@ export default function StudentResources() {
     setSearch(searchInput.trim())
   }
 
+  const clearFilters = () => {
+    setSearchInput('')
+    setSearch('')
+    setSubjectId('')
+    setResourceType('')
+  }
+
   const view = async (resource: LearningResourceItem) => {
     const win = openPreviewWindow()
     setBusy({ id: resource.id, action: 'view' })
@@ -121,7 +128,10 @@ export default function StudentResources() {
             {RESOURCE_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
-        <button className="primary-button" type="submit">Search</button>
+        <button className="primary-button compact-button" type="submit">Search</button>
+        <button className="secondary-button compact-button" type="button" onClick={clearFilters}>
+          Clear filters
+        </button>
       </form>
       {error && <ErrorState message={error} onRetry={load} />}
       {!items && !error && <LoadingState label="Loading learning resources" />}
@@ -153,7 +163,7 @@ export default function StudentResources() {
           ))}
         </div>
       ) : (
-        <EmptyState title="No learning resources found" description={filtered ? 'No published resources match the current filters.' : 'Learning resources for your subjects have not been published yet.'} />
+        <EmptyState title="No learning resources found" description={filtered ? 'No published resources match the current filters. Draft and archived resources are not shown.' : 'Learning resources for your subjects have not been published yet.'} />
       ))}
     </section>
   )

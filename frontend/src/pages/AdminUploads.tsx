@@ -64,6 +64,8 @@ export default function AdminUploads() {
   const [data, setData] = useState<UploadResponse | null>(null)
   const [error, setError] = useState('')
   const [kindFilter, setKindFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [archiveFilter, setArchiveFilter] = useState('')
   const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
 
   const load = useCallback(() => {
@@ -80,9 +82,20 @@ export default function AdminUploads() {
 
   const visible = useMemo(() => {
     if (!data) return []
-    if (!kindFilter) return data.items
-    return data.items.filter((item) => item.kind === kindFilter)
-  }, [data, kindFilter])
+    return data.items.filter((item) => {
+      if (kindFilter && item.kind !== kindFilter) return false
+      if (statusFilter && item.status !== statusFilter) return false
+      if (archiveFilter === 'active' && !item.active) return false
+      if (archiveFilter === 'archived' && item.active) return false
+      return true
+    })
+  }, [data, kindFilter, statusFilter, archiveFilter])
+
+  const clearFilters = () => {
+    setKindFilter('')
+    setStatusFilter('')
+    setArchiveFilter('')
+  }
 
   const view = async (item: UploadItem) => {
     const win = openPreviewWindow()
@@ -143,6 +156,27 @@ export default function AdminUploads() {
             <option value="RESOURCE">Learning resources</option>
           </select>
         </label>
+        <label>
+          Publication status
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="">All statuses</option>
+            <option value="DRAFT">Draft</option>
+            <option value="PENDING">Pending review</option>
+            <option value="VERIFIED">Published</option>
+            <option value="REJECTED">Rejected</option>
+          </select>
+        </label>
+        <label>
+          Archive state
+          <select value={archiveFilter} onChange={(event) => setArchiveFilter(event.target.value)}>
+            <option value="">All states</option>
+            <option value="active">Active</option>
+            <option value="archived">Archived</option>
+          </select>
+        </label>
+        <button className="secondary-button compact-button" type="button" onClick={clearFilters}>
+          Clear filters
+        </button>
       </div>
 
       {error && <ErrorState message={error} onRetry={load} />}
@@ -165,12 +199,20 @@ export default function AdminUploads() {
               {visible.map((item) => (
                 <tr key={`${item.kind}-${item.id}`}>
                   <td><span className="type-pill">{KIND_LABELS[item.kind]}</span></td>
-                  <td>
-                    <strong>{item.title}</strong>
-                    {!item.active && <span className="table-subtext">Archived</span>}
-                  </td>
+                  <td><strong>{item.title}</strong></td>
                   <td>{item.subject_code ?? '—'}</td>
-                  <td>{item.status === 'VERIFIED' ? 'Published' : item.status}</td>
+                  <td>
+                    {item.active ? (
+                      item.status === 'VERIFIED' ? 'Published' : item.status
+                    ) : (
+                      <>
+                        <strong>Archived</strong>
+                        <span className="table-subtext">
+                          Publication: {item.status === 'VERIFIED' ? 'Published' : item.status}
+                        </span>
+                      </>
+                    )}
+                  </td>
                   <td>{formatSize(item.size)}</td>
                   <td>{formatDate(item.created_at)}</td>
                   <td>

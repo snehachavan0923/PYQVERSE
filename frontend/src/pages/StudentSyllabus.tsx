@@ -44,6 +44,12 @@ export default function StudentSyllabus() {
     setSearch(searchInput.trim())
   }
 
+  const clearFilters = () => {
+    setSearchInput('')
+    setSearch('')
+    setSubjectId('')
+  }
+
   const view = async (document: SyllabusDocumentItem) => {
     const win = openPreviewWindow()
     setBusy({ id: document.id, action: 'view' })
@@ -99,7 +105,10 @@ export default function StudentSyllabus() {
             {subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.code} — {subject.name}</option>)}
           </select>
         </label>
-        <button className="primary-button" type="submit">Search</button>
+        <button className="primary-button compact-button" type="submit">Search</button>
+        <button className="secondary-button compact-button" type="button" onClick={clearFilters}>
+          Clear filters
+        </button>
       </form>
       {error && <ErrorState message={error} onRetry={load} />}
       {!items && !error && <LoadingState label="Loading syllabus documents" />}
@@ -130,7 +139,7 @@ export default function StudentSyllabus() {
           ))}
         </div>
       ) : (
-        <EmptyState title="No syllabus found" description={search || subjectId ? 'No published syllabus matches the current filters.' : 'Syllabus documents for your subjects have not been published yet.'} />
+        <EmptyState title="No syllabus found" description={search || subjectId ? 'No published syllabus matches the current filters. Draft and archived documents are not shown.' : 'Syllabus documents for your subjects have not been published yet.'} />
       ))}
     </section>
   )

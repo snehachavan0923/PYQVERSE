@@ -53,6 +53,14 @@ export default function StudentPyqs() {
     setSearch(searchInput.trim())
   }
 
+  const clearFilters = () => {
+    setSearchInput('')
+    setSearch('')
+    setSubjectId('')
+    setYear('')
+    setExamType('')
+  }
+
   const view = async (paper: QuestionPaperItem) => {
     const win = openPreviewWindow()
     setBusy({ id: paper.id, action: 'view' })
@@ -125,7 +133,10 @@ export default function StudentPyqs() {
             <option value="SEE">SEE</option>
           </select>
         </label>
-        <button className="primary-button" type="submit">Search</button>
+        <button className="primary-button compact-button" type="submit">Search</button>
+        <button className="secondary-button compact-button" type="button" onClick={clearFilters}>
+          Clear filters
+        </button>
       </form>
       {error && <ErrorState message={error} onRetry={load} />}
       {!items && !error && <LoadingState label="Loading question papers" />}
@@ -155,7 +166,7 @@ export default function StudentPyqs() {
           ))}
         </div>
       ) : (
-        <EmptyState title="No question papers found" description={filtered ? 'No published question papers match the current filters.' : 'Previous year question papers for your subjects have not been published yet.'} />
+        <EmptyState title="No question papers found" description={filtered ? 'No published question papers match the current filters. Draft and archived papers are not shown.' : 'Previous year question papers for your subjects have not been published yet.'} />
       ))}
     </section>
   )
