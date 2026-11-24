@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { errorDetail } from '../services/authApi'
-import { listStudentPyqs, openStudentDownload } from '../services/contentApi'
+import { listStudentPyqs, openStudentDownload, openStudentPreview } from '../services/contentApi'
 import notifications from '../services/notification'
 import type { QuestionPaperItem } from '../types/dashboard'
 import { useStudentSubjects } from '../hooks/useStudentSubjects'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
+import ContentActions from '../components/ContentActions'
 import { LoadingState, ErrorState } from '../components/PageState'
+import {
+  closePreviewWindow,
+  loadPreview,
+  openPreviewWindow,
+  triggerDownload,
+} from '../utils/documentActions'
 
 const CURRENT_YEAR = new Date().getFullYear()
 const YEARS = Array.from({ length: 11 }).map((_, index) => CURRENT_YEAR - index)
@@ -22,7 +29,7 @@ export default function StudentPyqs() {
   const [subjectId, setSubjectId] = useState('')
   const [year, setYear] = useState('')
   const [examType, setExamType] = useState('')
-  const [downloading, setDownloading] = useState('')
+  const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
 
   const load = useCallback(() => {
     setError('')
@@ -46,15 +53,39 @@ export default function StudentPyqs() {
     setSearch(searchInput.trim())
   }
 
+  const view = async (paper: QuestionPaperItem) => {
+    const win = openPreviewWindow()
+    setBusy({ id: paper.id, action: 'view' })
+    try {
+      const url = await openStudentPreview(session, 'pyq', paper.id)
+      if (!loadPreview(win, url)) {
+        void notifications.error(
+          'Preview blocked',
+          'Allow pop-ups for PYQVERSE to preview this PDF, or use Download instead.',
+        )
+      }
+    } catch (err) {
+      closePreviewWindow(win)
+      setBusy(null)
+      const retry = await notifications.retryError(
+        'Preview unavailable',
+        errorDetail(err, 'The preview link could not be created. It may have expired.'),
+      )
+      if (retry) void view(paper)
+      return
+    }
+    setBusy(null)
+  }
+
   const download = async (paper: QuestionPaperItem) => {
-    setDownloading(paper.id)
+    setBusy({ id: paper.id, action: 'download' })
     try {
       const url = await openStudentDownload(session, 'pyq', paper.id)
-      window.open(url, '_blank', 'noopener,noreferrer')
+      triggerDownload(url)
     } catch (err) {
-      void notifications.error('Download unavailable', errorDetail(err, 'The question paper could not be opened'))
+      void notifications.error('Download unavailable', errorDetail(err, 'The question paper could not be downloaded'))
     } finally {
-      setDownloading('')
+      setBusy(null)
     }
   }
 
@@ -113,9 +144,12 @@ export default function StudentPyqs() {
                 </div>
               </div>
               <div className="content-item-side">
-                <button className="primary-button compact-button" type="button" disabled={downloading === paper.id} onClick={() => void download(paper)}>
-                  {downloading === paper.id ? 'Opening…' : 'Download'}
-                </button>
+                <ContentActions
+                  label={paper.title || paper.original_filename}
+                  busy={busy?.id === paper.id}
+                  onView={() => void view(paper)}
+                  onDownload={() => void download(paper)}
+                />
               </div>
             </article>
           ))}

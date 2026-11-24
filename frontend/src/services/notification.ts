@@ -95,6 +95,19 @@ export function error(title: string, text?: string): Promise<SweetAlertResult> {
   })
 }
 
+export async function retryError(title: string, text?: string): Promise<boolean> {
+  const result = await Swal.fire({
+    ...dialog(currentTheme(), true),
+    icon: 'error',
+    title,
+    text,
+    showCancelButton: true,
+    confirmButtonText: 'Retry',
+    cancelButtonText: 'Dismiss',
+  })
+  return result.isConfirmed === true
+}
+
 export function warning(title: string, text?: string): Promise<SweetAlertResult> {
   return Swal.fire({
     ...dialog(currentTheme(), false),
@@ -140,5 +153,14 @@ export async function confirm({
   return result.isConfirmed === true
 }
 
-const notifications = { success, error, warning, info, confirm, toast, currentTheme }
+const notifications = {
+  success,
+  error,
+  retryError,
+  warning,
+  info,
+  confirm,
+  toast,
+  currentTheme,
+}
 export default notifications

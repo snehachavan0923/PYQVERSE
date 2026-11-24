@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { errorDetail } from '../services/authApi'
-import { listStudentResources, openStudentDownload } from '../services/contentApi'
+import { listStudentResources, openStudentDownload, openStudentPreview } from '../services/contentApi'
 import notifications from '../services/notification'
 import type { LearningResourceItem } from '../types/dashboard'
 import { useStudentSubjects } from '../hooks/useStudentSubjects'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
+import ContentActions from '../components/ContentActions'
 import { LoadingState, ErrorState } from '../components/PageState'
+import {
+  closePreviewWindow,
+  isPdfFile,
+  loadPreview,
+  openPreviewWindow,
+  triggerDownload,
+} from '../utils/documentActions'
 
 const RESOURCE_TYPES = [
   ['', 'All resource types'],
@@ -27,7 +35,7 @@ export default function StudentResources() {
   const [search, setSearch] = useState('')
   const [subjectId, setSubjectId] = useState('')
   const [resourceType, setResourceType] = useState('')
-  const [downloading, setDownloading] = useState('')
+  const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
 
   const load = useCallback(() => {
     setError('')
@@ -50,15 +58,39 @@ export default function StudentResources() {
     setSearch(searchInput.trim())
   }
 
+  const view = async (resource: LearningResourceItem) => {
+    const win = openPreviewWindow()
+    setBusy({ id: resource.id, action: 'view' })
+    try {
+      const url = await openStudentPreview(session, 'resource', resource.id)
+      if (!loadPreview(win, url)) {
+        void notifications.error(
+          'Preview blocked',
+          'Allow pop-ups for PYQVERSE to preview this PDF, or use Download instead.',
+        )
+      }
+    } catch (err) {
+      closePreviewWindow(win)
+      setBusy(null)
+      const retry = await notifications.retryError(
+        'Preview unavailable',
+        errorDetail(err, 'The preview link could not be created. It may have expired.'),
+      )
+      if (retry) void view(resource)
+      return
+    }
+    setBusy(null)
+  }
+
   const download = async (resource: LearningResourceItem) => {
-    setDownloading(resource.id)
+    setBusy({ id: resource.id, action: 'download' })
     try {
       const url = await openStudentDownload(session, 'resource', resource.id)
-      window.open(url, '_blank', 'noopener,noreferrer')
+      triggerDownload(url)
     } catch (err) {
-      void notifications.error('Download unavailable', errorDetail(err, 'The learning resource could not be opened'))
+      void notifications.error('Download unavailable', errorDetail(err, 'The learning resource could not be downloaded'))
     } finally {
-      setDownloading('')
+      setBusy(null)
     }
   }
 
@@ -108,9 +140,14 @@ export default function StudentResources() {
                 </div>
               </div>
               <div className="content-item-side">
-                <button className="primary-button compact-button" type="button" disabled={downloading === resource.id} onClick={() => void download(resource)}>
-                  {downloading === resource.id ? 'Opening…' : 'Download'}
-                </button>
+                <ContentActions
+                  label={resource.title}
+                  busy={busy?.id === resource.id}
+                  viewDisabled={!isPdfFile(resource.file_type)}
+                  viewHint={isPdfFile(resource.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                  onView={() => void view(resource)}
+                  onDownload={() => void download(resource)}
+                />
               </div>
             </article>
           ))}

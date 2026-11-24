@@ -5,6 +5,7 @@ import {
   archiveAdminContent,
   listAdminContent,
   openAdminDownload,
+  openAdminPreview,
   updateAdminContent,
   uploadAdminContent,
   type ContentKind,
@@ -18,7 +19,15 @@ import type {
 } from '../types/dashboard'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
+import ContentActions from '../components/ContentActions'
 import { LoadingState, ErrorState } from '../components/PageState'
+import {
+  closePreviewWindow,
+  isPdfFile,
+  loadPreview,
+  openPreviewWindow,
+  triggerDownload,
+} from '../utils/documentActions'
 
 type ContentItem = SyllabusDocumentItem | QuestionPaperItem | LearningResourceItem
 
@@ -94,7 +103,7 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   const [items, setItems] = useState<ContentItem[] | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
-  const [busyId, setBusyId] = useState('')
+  const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
   const [editing, setEditing] = useState<ContentItem | null>(null)
   const [filterSubjectId, setFilterSubjectId] = useState('')
 
@@ -252,15 +261,39 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
     }
   }
 
+  const view = async (item: ContentItem) => {
+    const win = openPreviewWindow()
+    setBusy({ id: item.id, action: 'view' })
+    try {
+      const url = await openAdminPreview(session, kind, item.id)
+      if (!loadPreview(win, url)) {
+        void notifications.error(
+          'Preview blocked',
+          'Allow pop-ups for PYQVERSE to preview this PDF, or use Download instead.',
+        )
+      }
+    } catch (err) {
+      closePreviewWindow(win)
+      setBusy(null)
+      const retry = await notifications.retryError(
+        'Preview unavailable',
+        errorDetail(err, 'The preview link could not be created. It may have expired.'),
+      )
+      if (retry) void view(item)
+      return
+    }
+    setBusy(null)
+  }
+
   const download = async (item: ContentItem) => {
-    setBusyId(item.id)
+    setBusy({ id: item.id, action: 'download' })
     try {
       const url = await openAdminDownload(session, kind, item.id)
-      window.open(url, '_blank', 'noopener,noreferrer')
+      triggerDownload(url)
     } catch (err) {
-      void notifications.error('Download unavailable', errorDetail(err, 'The file could not be opened'))
+      void notifications.error('Download unavailable', errorDetail(err, 'The file could not be downloaded'))
     } finally {
-      setBusyId('')
+      setBusy(null)
     }
   }
 
@@ -509,14 +542,14 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
                     <button className="secondary-button compact-button" type="button" onClick={() => startEdit(item)}>
                       Edit
                     </button>
-                    <button
-                      className="primary-button compact-button"
-                      type="button"
-                      disabled={busyId === item.id}
-                      onClick={() => void download(item)}
-                    >
-                      {busyId === item.id ? 'Opening…' : 'Download'}
-                    </button>
+                    <ContentActions
+                      label={titleOf(item)}
+                      busy={busy?.id === item.id}
+                      viewDisabled={!isPdfFile(item.file_type)}
+                      viewHint={isPdfFile(item.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                      onView={() => void view(item)}
+                      onDownload={() => void download(item)}
+                    />
                     <button
                       className={active ? 'secondary-button compact-button danger-button' : 'secondary-button compact-button'}
                       type="button"

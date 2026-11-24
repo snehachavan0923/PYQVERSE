@@ -80,10 +80,25 @@ def delete_object(path: str) -> None:
         raise StorageError("The stored file could not be removed") from exc
 
 
-def create_signed_url(path: str, expires_in: int = SIGNED_URL_TTL_SECONDS) -> str:
+def create_signed_url(
+    path: str,
+    expires_in: int = SIGNED_URL_TTL_SECONDS,
+    *,
+    download_filename: str | None = None,
+) -> str:
+    """Create a short-lived signed URL for a private object.
+
+    Without ``download_filename`` the URL serves the object inline (used by the
+    browser PDF viewer for previews). Passing a filename forces an attachment
+    response so the browser downloads the file while preserving its name.
+    """
     bucket = _bucket()
+    options = {"download": download_filename} if download_filename else None
     try:
-        result = bucket.create_signed_url(path, expires_in)
+        if options is None:
+            result = bucket.create_signed_url(path, expires_in)
+        else:
+            result = bucket.create_signed_url(path, expires_in, options=options)
     except Exception as exc:
         raise StorageError("A secure download link could not be created") from exc
     if isinstance(result, dict):

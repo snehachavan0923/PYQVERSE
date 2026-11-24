@@ -2,12 +2,25 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { errorDetail } from '../services/authApi'
-import { getStudentSubject, openStudentDownload, type ContentKind } from '../services/contentApi'
+import {
+  getStudentSubject,
+  openStudentDownload,
+  openStudentPreview,
+  type ContentKind,
+} from '../services/contentApi'
 import notifications from '../services/notification'
 import type { StudentSubjectDetail as SubjectDetail } from '../types/dashboard'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
+import ContentActions from '../components/ContentActions'
 import { LoadingState, ErrorState } from '../components/PageState'
+import {
+  closePreviewWindow,
+  isPdfFile,
+  loadPreview,
+  openPreviewWindow,
+  triggerDownload,
+} from '../utils/documentActions'
 
 type Tab = 'overview' | 'syllabus' | 'pyqs' | 'resources'
 
@@ -29,7 +42,7 @@ export default function StudentSubjectDetail() {
   const [detail, setDetail] = useState<SubjectDetail | null>(null)
   const [error, setError] = useState('')
   const [tab, setTab] = useState<Tab>('overview')
-  const [downloading, setDownloading] = useState('')
+  const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
 
   const load = useCallback(() => {
     if (!subjectId) return
@@ -44,16 +57,39 @@ export default function StudentSubjectDetail() {
     load()
   }, [load])
 
+  const view = async (kind: ContentKind, id: string) => {
+    const win = openPreviewWindow()
+    setBusy({ id, action: 'view' })
+    try {
+      const url = await openStudentPreview(session, kind, id)
+      if (!loadPreview(win, url)) {
+        void notifications.error(
+          'Preview blocked',
+          'Allow pop-ups for PYQVERSE to preview this PDF, or use Download instead.',
+        )
+      }
+    } catch (err) {
+      closePreviewWindow(win)
+      setBusy(null)
+      const retry = await notifications.retryError(
+        'Preview unavailable',
+        errorDetail(err, 'The preview link could not be created. It may have expired.'),
+      )
+      if (retry) void view(kind, id)
+      return
+    }
+    setBusy(null)
+  }
+
   const download = async (kind: ContentKind, id: string) => {
-    setDownloading(id)
+    setBusy({ id, action: 'download' })
     try {
       const url = await openStudentDownload(session, kind, id)
-      window.open(url, '_blank', 'noopener,noreferrer')
-      void notifications.toast('success', 'Secure download link opened')
+      triggerDownload(url)
     } catch (err) {
-      void notifications.error('Download unavailable', errorDetail(err, 'The file could not be opened'))
+      void notifications.error('Download unavailable', errorDetail(err, 'The file could not be downloaded'))
     } finally {
-      setDownloading('')
+      setBusy(null)
     }
   }
 
@@ -133,9 +169,14 @@ export default function StudentSubjectDetail() {
                   </div>
                 </div>
                 <div className="content-item-side">
-                  <button className="primary-button compact-button" type="button" disabled={downloading === document.id} onClick={() => void download('syllabus', document.id)}>
-                    {downloading === document.id ? 'Opening…' : 'Download'}
-                  </button>
+                  <ContentActions
+                    label={document.original_filename}
+                    busy={busy?.id === document.id}
+                    viewDisabled={!isPdfFile(document.file_type)}
+                    viewHint={isPdfFile(document.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                    onView={() => void view('syllabus', document.id)}
+                    onDownload={() => void download('syllabus', document.id)}
+                  />
                 </div>
               </article>
             ))}
@@ -159,9 +200,12 @@ export default function StudentSubjectDetail() {
                   </div>
                 </div>
                 <div className="content-item-side">
-                  <button className="primary-button compact-button" type="button" disabled={downloading === paper.id} onClick={() => void download('pyq', paper.id)}>
-                    {downloading === paper.id ? 'Opening…' : 'Download'}
-                  </button>
+                  <ContentActions
+                    label={paper.title || paper.original_filename}
+                    busy={busy?.id === paper.id}
+                    onView={() => void view('pyq', paper.id)}
+                    onDownload={() => void download('pyq', paper.id)}
+                  />
                 </div>
               </article>
             ))}
@@ -184,9 +228,14 @@ export default function StudentSubjectDetail() {
                   </div>
                 </div>
                 <div className="content-item-side">
-                  <button className="primary-button compact-button" type="button" disabled={downloading === resource.id} onClick={() => void download('resource', resource.id)}>
-                    {downloading === resource.id ? 'Opening…' : 'Download'}
-                  </button>
+                  <ContentActions
+                    label={resource.title}
+                    busy={busy?.id === resource.id}
+                    viewDisabled={!isPdfFile(resource.file_type)}
+                    viewHint={isPdfFile(resource.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                    onView={() => void view('resource', resource.id)}
+                    onDownload={() => void download('resource', resource.id)}
+                  />
                 </div>
               </article>
             ))}

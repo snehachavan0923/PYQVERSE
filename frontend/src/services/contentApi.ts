@@ -55,16 +55,32 @@ export function getStudentSubject(session: AuthSession | null, subjectId: string
   return getWithAuth<StudentSubjectDetail>(`/student/subjects/${subjectId}`, session)
 }
 
+async function signedContentUrl(
+  session: AuthSession | null,
+  path: string,
+  preview: boolean,
+): Promise<string> {
+  const response = await api.get<{ url: string; filename?: string; disposition?: string }>(path, {
+    headers: authHeaders(session),
+    params: preview ? { preview: 'true' } : undefined,
+  })
+  return response.data.url
+}
+
 export async function openStudentDownload(
   session: AuthSession | null,
   kind: ContentKind,
   id: string,
 ): Promise<string> {
-  const response = await api.get<{ url: string; filename?: string }>(
-    `/student/${kind}/${id}/download`,
-    { headers: authHeaders(session) },
-  )
-  return response.data.url
+  return signedContentUrl(session, `/student/${kind}/${id}/download`, false)
+}
+
+export async function openStudentPreview(
+  session: AuthSession | null,
+  kind: ContentKind,
+  id: string,
+): Promise<string> {
+  return signedContentUrl(session, `/student/${kind}/${id}/download`, true)
 }
 
 export interface AdminUploadPayload {
@@ -133,8 +149,13 @@ export async function openAdminDownload(
   kind: ContentKind,
   id: string,
 ): Promise<string> {
-  const response = await api.get<{ url: string }>(`/admin/${kind}/${id}/download`, {
-    headers: authHeaders(session),
-  })
-  return response.data.url
+  return signedContentUrl(session, `/admin/${kind}/${id}/download`, false)
+}
+
+export async function openAdminPreview(
+  session: AuthSession | null,
+  kind: ContentKind,
+  id: string,
+): Promise<string> {
+  return signedContentUrl(session, `/admin/${kind}/${id}/download`, true)
 }

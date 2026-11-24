@@ -332,7 +332,7 @@ def test_student_download_denies_unpublished_and_archived_content(monkeypatch):
     monkeypatch.setattr(
         content_routes.storage,
         "create_signed_url",
-        lambda path: signed.append(path) or "https://signed.example/file",
+        lambda path, **_kwargs: signed.append(path) or "https://signed.example/file",
     )
 
     draft_doc = _document(subject_id, status=VerificationStatus.DRAFT)
@@ -414,7 +414,7 @@ def test_authorized_student_download_creates_signed_url(monkeypatch):
     monkeypatch.setattr(
         content_routes.storage,
         "create_signed_url",
-        lambda path: "https://signed.example/private",
+        lambda path, **_kwargs: "https://signed.example/private",
     )
     result = content_routes.student_download("resource", resource.id, student, db)
     assert result["url"] == "https://signed.example/private"
@@ -449,7 +449,7 @@ def test_admin_upload_update_archive_and_download_syllabus(monkeypatch):
     db = LookupDB(lookup={subject.id: subject, scheme.id: scheme, semester.id: semester})
     monkeypatch.setattr(content_routes.storage, "upload_bytes", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        content_routes.storage, "create_signed_url", lambda path: "https://signed.example/syllabus"
+        content_routes.storage, "create_signed_url", lambda path, **_kwargs: "https://signed.example/syllabus"
     )
 
     upload = UploadFile(
@@ -507,7 +507,7 @@ def test_admin_upload_update_archive_and_download_pyq(monkeypatch):
     db = LookupDB(lookup={subject.id: subject, scheme.id: scheme, semester.id: semester})
     monkeypatch.setattr(content_routes.storage, "upload_bytes", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        content_routes.storage, "create_signed_url", lambda path: "https://signed.example/pyq"
+        content_routes.storage, "create_signed_url", lambda path, **_kwargs: "https://signed.example/pyq"
     )
 
     upload = UploadFile(
@@ -564,7 +564,7 @@ def test_admin_upload_update_archive_and_download_resource(monkeypatch):
     db = LookupDB(lookup={subject.id: subject, scheme.id: scheme, semester.id: semester})
     monkeypatch.setattr(content_routes.storage, "upload_bytes", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        content_routes.storage, "create_signed_url", lambda path: "https://signed.example/resource"
+        content_routes.storage, "create_signed_url", lambda path, **_kwargs: "https://signed.example/resource"
     )
 
     upload = UploadFile(

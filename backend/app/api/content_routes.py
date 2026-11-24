@@ -630,6 +630,7 @@ def admin_uploads(
                 "active": document.active,
                 "created_at": _iso(version.created_at),
                 "size": document.file_size,
+                "file_type": getattr(document, "file_type", None),
             }
         )
     for paper, document in pyq_rows:
@@ -643,6 +644,7 @@ def admin_uploads(
                 "active": document.active,
                 "created_at": _iso(document.uploaded_at),
                 "size": document.file_size,
+                "file_type": getattr(document, "file_type", None),
             }
         )
     for resource in resources:
@@ -656,6 +658,7 @@ def admin_uploads(
                 "active": resource.active,
                 "created_at": _iso(resource.uploaded_at),
                 "size": resource.file_size,
+                "file_type": getattr(resource, "file_type", None),
             }
         )
     items.sort(key=lambda item: item["created_at"] or "", reverse=True)
@@ -876,14 +879,35 @@ def student_subject_detail(
 
 
 # --------------------------------------------------------------- downloads
-def _signed_download(path: str, filename: str | None) -> dict:
+def _signed_download(
+    path: str,
+    filename: str | None,
+    *,
+    preview: bool = False,
+    file_type: str | None = None,
+) -> dict:
+    if preview and (file_type or "").lower() != "pdf":
+        raise HTTPException(
+            status_code=415,
+            detail="Preview is only available for PDF documents. Download the file instead.",
+        )
     try:
-        url = storage.create_signed_url(path)
+        if preview:
+            # No download option: Supabase serves the object inline so the
+            # browser's native PDF viewer can render it in a new tab.
+            url = storage.create_signed_url(path)
+        else:
+            url = storage.create_signed_url(path, download_filename=filename)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Private storage is unavailable") from exc
-    return {"url": url, "expires_in": storage.SIGNED_URL_TTL_SECONDS, "filename": filename}
+    return {
+        "url": url,
+        "expires_in": storage.SIGNED_URL_TTL_SECONDS,
+        "filename": filename,
+        "disposition": "inline" if preview else "attachment",
+    }
 
 
 @router.get("/api/v1/student/{kind}/{content_id}/download")
@@ -892,6 +916,7 @@ def student_download(
     content_id: uuid.UUID,
     student: User = Depends(require_student),
     db: Session = Depends(get_db),
+    preview: bool = False,
 ):
     profile = _student_profile(db, student)
     subject_ids = _enrolled_subject_ids(db, profile)
@@ -908,7 +933,12 @@ def student_download(
         ):
             raise HTTPException(status_code=404, detail="Syllabus document not found")
         _require_enrolled(subject_ids, version.subject_id)
-        return _signed_download(document.storage_path, document.original_filename)
+        return _signed_download(
+            document.storage_path,
+            document.original_filename,
+            preview=preview,
+            file_type=getattr(document, "file_type", None),
+        )
     if kind == "pyq":
         paper = db.get(QuestionPaper, content_id)
         document = db.get(UploadedDocument, paper.uploaded_document_id) if paper else None
@@ -921,7 +951,12 @@ def student_download(
         ):
             raise HTTPException(status_code=404, detail="Question paper not found")
         _require_enrolled(subject_ids, paper.subject_id)
-        return _signed_download(document.storage_path, document.original_filename)
+        return _signed_download(
+            document.storage_path,
+            document.original_filename,
+            preview=preview,
+            file_type=getattr(document, "file_type", None),
+        )
     if kind == "resource":
         resource = db.get(LearningResource, content_id)
         if (
@@ -931,7 +966,12 @@ def student_download(
         ):
             raise HTTPException(status_code=404, detail="Learning resource not found")
         _require_enrolled(subject_ids, resource.subject_id)
-        return _signed_download(resource.storage_path, resource.original_filename)
+        return _signed_download(
+            resource.storage_path,
+            resource.original_filename,
+            preview=preview,
+            file_type=getattr(resource, "file_type", None),
+        )
     raise HTTPException(status_code=404, detail="Unknown content kind")
 
 
@@ -941,21 +981,37 @@ def admin_download(
     content_id: uuid.UUID,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
+    preview: bool = False,
 ):
     if kind == "syllabus":
         document = db.get(SyllabusDocument, content_id)
         if document is None:
             raise HTTPException(status_code=404, detail="Syllabus document not found")
-        return _signed_download(document.storage_path, document.original_filename)
+        return _signed_download(
+            document.storage_path,
+            document.original_filename,
+            preview=preview,
+            file_type=getattr(document, "file_type", None),
+        )
     if kind == "pyq":
         paper = db.get(QuestionPaper, content_id)
         document = db.get(UploadedDocument, paper.uploaded_document_id) if paper else None
         if document is None:
             raise HTTPException(status_code=404, detail="Question paper not found")
-        return _signed_download(document.storage_path, document.original_filename)
+        return _signed_download(
+            document.storage_path,
+            document.original_filename,
+            preview=preview,
+            file_type=getattr(document, "file_type", None),
+        )
     if kind == "resource":
         resource = db.get(LearningResource, content_id)
         if resource is None:
             raise HTTPException(status_code=404, detail="Learning resource not found")
-        return _signed_download(resource.storage_path, resource.original_filename)
+        return _signed_download(
+            resource.storage_path,
+            resource.original_filename,
+            preview=preview,
+            file_type=getattr(resource, "file_type", None),
+        )
     raise HTTPException(status_code=404, detail="Unknown content kind")

@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { errorDetail, getWithAuth } from '../services/authApi'
-import { openAdminDownload, type ContentKind } from '../services/contentApi'
+import { openAdminDownload, openAdminPreview, type ContentKind } from '../services/contentApi'
 import notifications from '../services/notification'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
+import ContentActions from '../components/ContentActions'
 import { LoadingState, ErrorState } from '../components/PageState'
+import {
+  closePreviewWindow,
+  isPdfFile,
+  loadPreview,
+  openPreviewWindow,
+  triggerDownload,
+} from '../utils/documentActions'
 
 type UploadKind = 'SYLLABUS' | 'PYQ' | 'RESOURCE'
 
@@ -18,6 +26,7 @@ interface UploadItem {
   active: boolean
   created_at: string | null
   size: number | null
+  file_type: string | null
 }
 
 interface UploadResponse {
@@ -55,7 +64,7 @@ export default function AdminUploads() {
   const [data, setData] = useState<UploadResponse | null>(null)
   const [error, setError] = useState('')
   const [kindFilter, setKindFilter] = useState('')
-  const [busyId, setBusyId] = useState('')
+  const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
 
   const load = useCallback(() => {
     setError('')
@@ -75,15 +84,39 @@ export default function AdminUploads() {
     return data.items.filter((item) => item.kind === kindFilter)
   }, [data, kindFilter])
 
+  const view = async (item: UploadItem) => {
+    const win = openPreviewWindow()
+    setBusy({ id: item.id, action: 'view' })
+    try {
+      const url = await openAdminPreview(session, downloadKind(item.kind), item.id)
+      if (!loadPreview(win, url)) {
+        void notifications.error(
+          'Preview blocked',
+          'Allow pop-ups for PYQVERSE to preview this PDF, or use Download instead.',
+        )
+      }
+    } catch (err) {
+      closePreviewWindow(win)
+      setBusy(null)
+      const retry = await notifications.retryError(
+        'Preview unavailable',
+        errorDetail(err, 'The preview link could not be created. It may have expired.'),
+      )
+      if (retry) void view(item)
+      return
+    }
+    setBusy(null)
+  }
+
   const download = async (item: UploadItem) => {
-    setBusyId(item.id)
+    setBusy({ id: item.id, action: 'download' })
     try {
       const url = await openAdminDownload(session, downloadKind(item.kind), item.id)
-      window.open(url, '_blank', 'noopener,noreferrer')
+      triggerDownload(url)
     } catch (err) {
-      void notifications.error('Download unavailable', errorDetail(err, 'The file could not be opened'))
+      void notifications.error('Download unavailable', errorDetail(err, 'The file could not be downloaded'))
     } finally {
-      setBusyId('')
+      setBusy(null)
     }
   }
 
@@ -141,14 +174,14 @@ export default function AdminUploads() {
                   <td>{formatSize(item.size)}</td>
                   <td>{formatDate(item.created_at)}</td>
                   <td>
-                    <button
-                      className="text-button"
-                      type="button"
-                      disabled={busyId === item.id}
-                      onClick={() => void download(item)}
-                    >
-                      {busyId === item.id ? 'Opening…' : 'Download'}
-                    </button>
+                    <ContentActions
+                      label={item.title}
+                      busy={busy?.id === item.id}
+                      viewDisabled={!isPdfFile(item.file_type)}
+                      viewHint={isPdfFile(item.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                      onView={() => void view(item)}
+                      onDownload={() => void download(item)}
+                    />
                   </td>
                 </tr>
               ))}

@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { errorDetail } from '../services/authApi'
-import { listStudentSyllabus, openStudentDownload } from '../services/contentApi'
+import { listStudentSyllabus, openStudentDownload, openStudentPreview } from '../services/contentApi'
 import notifications from '../services/notification'
 import type { SyllabusDocumentItem } from '../types/dashboard'
 import { useStudentSubjects } from '../hooks/useStudentSubjects'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
+import ContentActions from '../components/ContentActions'
 import { LoadingState, ErrorState } from '../components/PageState'
+import {
+  closePreviewWindow,
+  isPdfFile,
+  loadPreview,
+  openPreviewWindow,
+  triggerDownload,
+} from '../utils/documentActions'
 
 export default function StudentSyllabus() {
   const { session } = useAuth()
@@ -17,7 +25,7 @@ export default function StudentSyllabus() {
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [subjectId, setSubjectId] = useState('')
-  const [downloading, setDownloading] = useState('')
+  const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
 
   const load = useCallback(() => {
     setError('')
@@ -36,15 +44,39 @@ export default function StudentSyllabus() {
     setSearch(searchInput.trim())
   }
 
-  const download = async (id: string) => {
-    setDownloading(id)
+  const view = async (document: SyllabusDocumentItem) => {
+    const win = openPreviewWindow()
+    setBusy({ id: document.id, action: 'view' })
     try {
-      const url = await openStudentDownload(session, 'syllabus', id)
-      window.open(url, '_blank', 'noopener,noreferrer')
+      const url = await openStudentPreview(session, 'syllabus', document.id)
+      if (!loadPreview(win, url)) {
+        void notifications.error(
+          'Preview blocked',
+          'Allow pop-ups for PYQVERSE to preview this PDF, or use Download instead.',
+        )
+      }
     } catch (err) {
-      void notifications.error('Download unavailable', errorDetail(err, 'The syllabus file could not be opened'))
+      closePreviewWindow(win)
+      setBusy(null)
+      const retry = await notifications.retryError(
+        'Preview unavailable',
+        errorDetail(err, 'The preview link could not be created. It may have expired.'),
+      )
+      if (retry) void view(document)
+      return
+    }
+    setBusy(null)
+  }
+
+  const download = async (document: SyllabusDocumentItem) => {
+    setBusy({ id: document.id, action: 'download' })
+    try {
+      const url = await openStudentDownload(session, 'syllabus', document.id)
+      triggerDownload(url)
+    } catch (err) {
+      void notifications.error('Download unavailable', errorDetail(err, 'The syllabus file could not be downloaded'))
     } finally {
-      setDownloading('')
+      setBusy(null)
     }
   }
 
@@ -85,9 +117,14 @@ export default function StudentSyllabus() {
                 </div>
               </div>
               <div className="content-item-side">
-                <button className="primary-button compact-button" type="button" disabled={downloading === document.id} onClick={() => void download(document.id)}>
-                  {downloading === document.id ? 'Opening…' : 'Download'}
-                </button>
+                <ContentActions
+                  label={document.original_filename}
+                  busy={busy?.id === document.id}
+                  viewDisabled={!isPdfFile(document.file_type)}
+                  viewHint={isPdfFile(document.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                  onView={() => void view(document)}
+                  onDownload={() => void download(document)}
+                />
               </div>
             </article>
           ))}
