@@ -14,6 +14,7 @@ class BranchResponse(BaseModel):
 class SemesterResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    academic_scheme_id: uuid.UUID
     number: int
     name: str
     active: bool
@@ -25,6 +26,10 @@ class SubjectResponse(BaseModel):
     code: str
     name: str
     subject_type: str
+    credits: int | None = None
+    description: str | None = None
+    semester_id: uuid.UUID
+    academic_scheme_id: uuid.UUID
     active: bool
 
 

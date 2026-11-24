@@ -25,9 +25,12 @@ class UploadedDocument(Base):
     __tablename__ = "uploaded_documents"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(300))
+    description: Mapped[str | None] = mapped_column(Text)
     file_type: Mapped[str] = mapped_column(String(30), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
     academic_scheme_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("academic_schemes.id", ondelete="SET NULL"))
     semester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("semesters.id", ondelete="SET NULL"))
@@ -45,6 +48,8 @@ class QuestionPaper(Base):
     __tablename__ = "question_papers"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     uploaded_document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("uploaded_documents.id", ondelete="CASCADE"), unique=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(300))
+    description: Mapped[str | None] = mapped_column(Text)
     subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False)
     academic_scheme_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("academic_schemes.id", ondelete="CASCADE"), nullable=False)
     semester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("semesters.id", ondelete="CASCADE"), nullable=False)

@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../services/supabase'
+import notifications from '../services/notification'
+import PasswordField from '../components/PasswordField'
 
 const PASSWORD_POLICY = 'At least 8 characters with an uppercase letter, a lowercase letter and a number.'
 
@@ -35,6 +37,7 @@ export default function ResetPassword() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (loading) return
     setError('')
     if (!supabase) {
       setError('Supabase authentication is not configured.')
@@ -52,10 +55,14 @@ export default function ResetPassword() {
     try {
       const { error: updateError } = await supabase.auth.updateUser({ password })
       if (updateError) {
-        setError(updateError.message)
+        await notifications.error(
+          'Password not updated',
+          'The recovery link may have expired. Request a new password reset link and try again.',
+        )
         return
       }
       await supabase.auth.signOut()
+      void notifications.toast('success', 'Password updated')
       setCompleted(true)
     } finally {
       setLoading(false)
@@ -90,32 +97,26 @@ export default function ResetPassword() {
         </p>
       ) : (
         <form onSubmit={submit}>
-          <label>
-            New password
-            <input
-              type="password"
-              autoComplete="new-password"
-              minLength={8}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Confirm new password
-            <input
-              type="password"
-              autoComplete="new-password"
-              minLength={8}
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              required
-            />
-          </label>
+          <PasswordField
+            label="New password"
+            autoComplete="new-password"
+            value={password}
+            onChange={setPassword}
+            minLength={8}
+            required
+          />
+          <PasswordField
+            label="Confirm new password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={setConfirmPassword}
+            minLength={8}
+            required
+          />
           <p className="form-hint">{PASSWORD_POLICY}</p>
           {error && <p className="form-error">{error}</p>}
           <button className="primary-button" disabled={loading}>
-            {loading ? 'Updating...' : 'Update password'}
+            {loading ? 'Updating…' : 'Update password'}
           </button>
         </form>
       )}

@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../services/api'
+import { friendlyError } from '../services/errors'
+import notifications from '../services/notification'
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('')
@@ -16,9 +18,9 @@ export default function ForgotPassword() {
     try {
       const response = await api.post<{ message: string }>('/auth/password-reset/request', { email })
       setMessage(response.data.message)
+      void notifications.toast('success', 'Reset request submitted')
     } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      setError(detail ?? 'Unable to request a password reset')
+      setError(friendlyError(err, 'Unable to request a password reset'))
     } finally {
       setLoading(false)
     }

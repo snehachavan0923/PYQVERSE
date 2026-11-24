@@ -12,6 +12,7 @@ from app.models.academic import (
 from app.models.ai import AIInteraction
 from app.models.document import PermissionStatus, QuestionPaper, UploadedDocument
 from app.models.progress import Bookmark, QuizAttempt, StudentProgress, StudentTopicActivity
+from app.models.resource import LearningResource, ResourceType
 from app.models.question import (
     ContentReview,
     DocumentPage,

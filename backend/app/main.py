@@ -1,9 +1,16 @@
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes import router as api_router
 from app.api.auth_routes import router as auth_router
+from app.api.admin_academic_routes import router as admin_academic_router
+from app.api.content_routes import router as content_router
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,3 +28,17 @@ app.add_middleware(
 
 app.include_router(api_router)
 app.include_router(auth_router)
+app.include_router(admin_academic_router)
+app.include_router(content_router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return a sanitized error and log only non-sensitive diagnostic metadata."""
+    logger.error(
+        "Unhandled server error path=%s method=%s exception_class=%s",
+        request.url.path,
+        request.method,
+        type(exc).__name__,
+    )
+    return JSONResponse(status_code=500, content={"detail": "An unexpected server error occurred"})

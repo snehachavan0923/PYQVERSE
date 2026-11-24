@@ -76,7 +76,10 @@ class Subject(Base):
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     subject_type: Mapped[str] = mapped_column(String(20), nullable=False, default="CORE")
     credits: Mapped[int | None] = mapped_column(Integer)
+    description: Mapped[str | None] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("CURRENT_TIMESTAMP"))
     __table_args__ = (
         UniqueConstraint("academic_scheme_id", "code", name="uq_subjects_scheme_code"),
         CheckConstraint("subject_type IN ('CORE','ELECTIVE')", name="ck_subject_type"),

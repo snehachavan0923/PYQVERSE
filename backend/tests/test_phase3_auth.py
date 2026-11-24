@@ -38,6 +38,9 @@ class ScalarResult:
     def all(self):
         return self.values
 
+    def unique(self):
+        return self
+
     def first(self):
         return self.values[0] if self.values else None
 
@@ -425,7 +428,7 @@ def test_admin_dashboard_uses_real_count_queries(monkeypatch):
         role=UserRole.ADMIN_FACULTY,
     )
     db = FakeDB()
-    db.scalar = MagicMock(side_effect=[8, 1, 1, 1, 5, 1, 2, 3, 0])
+    db.scalar = MagicMock(side_effect=[8, 1, 1, 1, 5, 1, 2, 3, 4, 6, 0])
     monkeypatch.setattr(auth_routes, "synchronized_user", lambda db, token: (admin, None))
 
     result = auth_routes.admin_dashboard("token", db)
@@ -440,8 +443,11 @@ def test_admin_dashboard_uses_real_count_queries(monkeypatch):
     assert result["document_overview"] == {
         "uploaded_documents": 2,
         "pyqs": 3,
+        "syllabus_documents": 4,
+        "learning_resources": 6,
         "pending_reviews": 0,
     }
+    assert result["recent_activity"] == []
 
 
 def test_student_dashboard_empty_state(monkeypatch):
@@ -491,12 +497,17 @@ def test_subject_summary_uses_actual_syllabus_and_pyq_rows():
                 [subject.id],
                 [semester],
             ]
+            self.execute_queue = [
+                [(subject.id, 2)],
+                [(subject.id, 3)],
+            ]
 
         def scalars(self, _query):
             return ScalarResult(self.scalars_queue.pop(0))
 
         def execute(self, _query):
-            return SimpleNamespace(all=lambda: [(subject.id, 2)])
+            rows = self.execute_queue.pop(0)
+            return SimpleNamespace(all=lambda: rows)
 
     summaries = auth_routes._subject_summaries(SummaryDB(), profile)
 
@@ -511,8 +522,8 @@ def test_subject_summary_uses_actual_syllabus_and_pyq_rows():
         "syllabus_available": True,
         "pyq_count": 2,
         "pyq_available": True,
-        "learning_resources_available": False,
-        "learning_resource_count": 0,
+        "learning_resources_available": True,
+        "learning_resource_count": 3,
     }]
 
 
@@ -530,6 +541,7 @@ def test_admin_user_list_is_paginated_and_has_no_secrets(monkeypatch):
         last_login_at=None,
     )
     profile = SimpleNamespace(
+        user_id=user.id,
         usn="1RV22CS001",
         profile_completed=True,
         branch_id=None,
@@ -540,7 +552,17 @@ def test_admin_user_list_is_paginated_and_has_no_secrets(monkeypatch):
     db.scalars.side_effect = [ScalarResult([user]), ScalarResult([profile])]
     monkeypatch.setattr(auth_routes, "synchronized_user", lambda db, token: (admin, None))
 
-    result = auth_routes.admin_users("token", db, page=1, page_size=20, role=None, search=None)
+    result = auth_routes.admin_users(
+        "token",
+        db,
+        page=1,
+        page_size=20,
+        role=None,
+        status=None,
+        branch_id=None,
+        semester_id=None,
+        search=None,
+    )
 
     assert result["total"] == 1
     assert result["pages"] == 1

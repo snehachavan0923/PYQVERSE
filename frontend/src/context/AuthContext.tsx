@@ -7,7 +7,8 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import api from '../services/api'
+import api, { SESSION_EXPIRED_EVENT } from '../services/api'
+import notifications from '../services/notification'
 import { supabase } from '../services/supabase'
 import type { AuthProfile, AuthSession } from '../types/auth'
 
@@ -54,6 +55,7 @@ function restoreStoredSession(): Promise<AuthSession | null> {
         },
       }
     } catch {
+      localStorage.removeItem('pyqverse_session')
       return null
     }
   })()
@@ -89,14 +91,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     void restoreSession()
 
-    if (!supabase) {
-      return () => { active = false }
+    let notifiedExpiry = false
+    const handleExpiry = () => {
+      setSession(null)
+      if (notifiedExpiry) return
+      notifiedExpiry = true
+      void notifications.warning('Session expired', 'Please sign in again to continue.')
+      window.setTimeout(() => {
+        notifiedExpiry = false
+      }, 4000)
     }
-    const { data } = supabase.auth.onAuthStateChange((event, supabaseSession) => {
-      if (event === 'SIGNED_OUT' && !supabaseSession) setSession(null)
-    })
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleExpiry)
+
+    const { data } = supabase
+      ? supabase.auth.onAuthStateChange((event, supabaseSession) => {
+          if (event === 'SIGNED_OUT' && !supabaseSession) setSession(null)
+        })
+      : { data: { subscription: { unsubscribe: () => undefined } } }
+
     return () => {
       active = false
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handleExpiry)
       data.subscription.unsubscribe()
     }
   }, [setSession])

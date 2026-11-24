@@ -1,38 +1,41 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import api from '../services/api'
+import { friendlyError } from '../services/errors'
+import notifications from '../services/notification'
 import { useAuth } from '../context/AuthContext'
+import PasswordField from '../components/PasswordField'
 import type { AuthSession } from '../types/auth'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { setSession } = useAuth()
   const navigate = useNavigate()
 
   const enterSession = (session: AuthSession) => {
     setSession(session)
+    void notifications.toast('success', `Welcome back, ${session.user.email}`)
     navigate(
       session.profile.role === 'ADMIN_FACULTY'
         ? '/admin'
         : session.profile.onboarding_completed
           ? '/student'
           : '/onboarding',
+      { replace: true },
     )
   }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    setError('')
+    if (loading) return
     setLoading(true)
     try {
       const response = await api.post<AuthSession>('/auth/login', { email, password })
       enterSession(response.data)
     } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      setError(detail ?? 'Unable to sign in')
+      void notifications.error('Sign-in failed', friendlyError(err, 'Unable to sign in'))
     } finally {
       setLoading(false)
     }
@@ -55,19 +58,15 @@ export default function Login() {
             required
           />
         </label>
-        <label>
-          Password
-          <input
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-          />
-        </label>
-        {error && <p className="form-error">{error}</p>}
+        <PasswordField
+          label="Password"
+          autoComplete="current-password"
+          value={password}
+          onChange={setPassword}
+          required
+        />
         <button className="primary-button" disabled={loading}>
-          {loading ? 'Signing in...' : 'Sign in'}
+          {loading ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
       <div className="auth-links">
