@@ -45,6 +45,7 @@ class SyllabusVersion(Base):
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("CURRENT_TIMESTAMP"))
     __table_args__ = (
         UniqueConstraint("subject_id", "version", name="uq_syllabus_subject_version"),
+        Index("ix_syllabus_versions_subject", "subject_id"),
         CheckConstraint(
             "source_verification_status IS NULL OR source_verification_status IN "
             "('VERIFIED','NEEDS_REVIEW','NOT_AVAILABLE')",

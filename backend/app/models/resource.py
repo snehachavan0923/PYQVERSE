@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Enum, ForeignKey, Integer, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, Enum, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +25,8 @@ class LearningResource(Base):
             "resource_type IN ('NOTES','STUDY_MATERIAL','REFERENCE','IMPORTANT_QUESTIONS','OTHER')",
             name="ck_learning_resource_type",
         ),
+        Index("ix_learning_resources_subject", "subject_id"),
+        Index("ix_learning_resources_subject_status", "subject_id", "verification_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
