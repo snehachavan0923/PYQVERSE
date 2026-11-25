@@ -86,6 +86,17 @@ def test_health_and_academic_api():
     assert semesters.status_code == 200
     assert any(item["number"] == 3 for item in semesters.json())
 
+    with SessionLocal() as db:
+        phase6_columns = db.execute(
+            text(
+                "SELECT count(*) FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name='subjects' "
+                "AND column_name IN ('course_category', 'source_verification_status')"
+            )
+        ).scalar_one()
+    if phase6_columns != 2:
+        pytest.skip("Phase 6 academic migration is not applied to the configured database")
+
     subjects = client.get("/api/v1/subjects")
     assert subjects.status_code == 200
     assert len(subjects.json()) == 8

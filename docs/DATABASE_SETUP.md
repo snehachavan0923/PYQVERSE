@@ -14,9 +14,13 @@ Commands:
 
 ```bash
 cd backend
-.venv/bin/alembic upgrade head
 .venv/bin/alembic current
+.venv/bin/alembic upgrade head
 .venv/bin/python -m app.services.seed_academic_catalog
 ```
 
-Never run destructive database commands. Schema changes must use Alembic migrations.
+Check the current revision first; run `alembic upgrade head` only after confirming the deployed revision is represented in this checkout. The seed command above is a static dry run. Apply catalog records only with the explicit `--apply` flag and appropriate approval.
+
+Before upgrading an existing database, confirm its current Alembic revision is present in this checkout. The configured database currently reports `b6d2f8a1c947`, which is not represented by the repository migration history; reconcile that history before running `alembic upgrade head`.
+
+Never run destructive database commands. Schema changes must use additive Alembic migrations.

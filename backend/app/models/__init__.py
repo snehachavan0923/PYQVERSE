@@ -1,6 +1,7 @@
 from app.models.academic import (
     AcademicScheme,
     Branch,
+    BranchSubjectOffering,
     College,
     ElectiveBasket,
     ElectiveOption,

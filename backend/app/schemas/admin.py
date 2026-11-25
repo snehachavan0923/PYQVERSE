@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -24,14 +25,30 @@ class SchemeCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     code: str = Field(min_length=1, max_length=30)
     college_id: uuid.UUID | None = None
+    valid_from: date | None = None
+    valid_to: date | None = None
     active: bool = True
+
+    @model_validator(mode="after")
+    def validate_validity(self):
+        if self.valid_from and self.valid_to and self.valid_to < self.valid_from:
+            raise ValueError("valid_to must be on or after valid_from")
+        return self
 
 
 class SchemeUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, min_length=2, max_length=100)
     code: str | None = Field(default=None, min_length=1, max_length=30)
+    valid_from: date | None = None
+    valid_to: date | None = None
     active: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_validity(self):
+        if self.valid_from and self.valid_to and self.valid_to < self.valid_from:
+            raise ValueError("valid_to must be on or after valid_from")
+        return self
 
 
 class SemesterCreate(BaseModel):
@@ -58,12 +75,33 @@ class SubjectCreate(BaseModel):
     subject_type: Literal["CORE", "ELECTIVE"] = "CORE"
     credits: int | None = Field(default=None, ge=0, le=30)
     description: str | None = Field(default=None, max_length=4000)
+    course_category: str | None = Field(default=None, max_length=100)
+    course_delivery: Literal["THEORY", "PRACTICAL", "THEORY_AND_PRACTICAL"] | None = None
+    lecture_credits: int | None = Field(default=None, ge=0, le=30)
+    tutorial_credits: int | None = Field(default=None, ge=0, le=30)
+    practical_credits: int | None = Field(default=None, ge=0, le=30)
+    lecture_hours: int | None = Field(default=None, ge=0, le=1000)
+    tutorial_hours: int | None = Field(default=None, ge=0, le=1000)
+    practical_hours: int | None = Field(default=None, ge=0, le=1000)
+    self_study_hours: int | None = Field(default=None, ge=0, le=1000)
+    practical_component_summary: str | None = Field(default=None, max_length=4000)
+    source_document_reference: str | None = Field(default=None, max_length=2000)
+    source_page_start: int | None = Field(default=None, ge=1)
+    source_page_end: int | None = Field(default=None, ge=1)
+    source_verification_status: Literal["VERIFIED", "NEEDS_REVIEW", "NOT_AVAILABLE"] | None = None
+    source_notes: str | None = Field(default=None, max_length=4000)
     active: bool = True
 
     @model_validator(mode="after")
     def normalize(self):
         self.code = self.code.strip().upper()
         self.name = self.name.strip()
+        if (
+            self.source_page_start is not None
+            and self.source_page_end is not None
+            and self.source_page_end < self.source_page_start
+        ):
+            raise ValueError("source_page_end must be on or after source_page_start")
         return self
 
 
@@ -75,6 +113,21 @@ class SubjectUpdate(BaseModel):
     subject_type: Literal["CORE", "ELECTIVE"] | None = None
     credits: int | None = Field(default=None, ge=0, le=30)
     description: str | None = Field(default=None, max_length=4000)
+    course_category: str | None = Field(default=None, max_length=100)
+    course_delivery: Literal["THEORY", "PRACTICAL", "THEORY_AND_PRACTICAL"] | None = None
+    lecture_credits: int | None = Field(default=None, ge=0, le=30)
+    tutorial_credits: int | None = Field(default=None, ge=0, le=30)
+    practical_credits: int | None = Field(default=None, ge=0, le=30)
+    lecture_hours: int | None = Field(default=None, ge=0, le=1000)
+    tutorial_hours: int | None = Field(default=None, ge=0, le=1000)
+    practical_hours: int | None = Field(default=None, ge=0, le=1000)
+    self_study_hours: int | None = Field(default=None, ge=0, le=1000)
+    practical_component_summary: str | None = Field(default=None, max_length=4000)
+    source_document_reference: str | None = Field(default=None, max_length=2000)
+    source_page_start: int | None = Field(default=None, ge=1)
+    source_page_end: int | None = Field(default=None, ge=1)
+    source_verification_status: Literal["VERIFIED", "NEEDS_REVIEW", "NOT_AVAILABLE"] | None = None
+    source_notes: str | None = Field(default=None, max_length=4000)
     active: bool | None = None
 
 
@@ -82,7 +135,14 @@ class ElectiveBasketCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     academic_scheme_id: uuid.UUID
     semester_id: uuid.UUID
+    branch_id: uuid.UUID | None = None
     name: str = Field(min_length=2, max_length=200)
+
+
+class BranchSubjectOfferingCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    branch_id: uuid.UUID
+    subject_id: uuid.UUID
 
 
 class ElectiveOptionCreate(BaseModel):

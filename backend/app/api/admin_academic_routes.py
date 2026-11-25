@@ -10,6 +10,7 @@ from app.database.connection import get_db
 from app.models.academic import (
     AcademicScheme,
     Branch,
+    BranchSubjectOffering,
     College,
     ElectiveBasket,
     ElectiveOption,
@@ -20,6 +21,7 @@ from app.models.user import User
 from app.schemas.admin import (
     BranchCreate,
     BranchUpdate,
+    BranchSubjectOfferingCreate,
     ElectiveBasketCreate,
     ElectiveOptionCreate,
     SchemeCreate,
@@ -31,6 +33,24 @@ from app.schemas.admin import (
 )
 
 router = APIRouter(prefix="/api/v1/admin/academic", tags=["admin-academic"])
+
+SUBJECT_METADATA_FIELDS = (
+    "course_category",
+    "course_delivery",
+    "lecture_credits",
+    "tutorial_credits",
+    "practical_credits",
+    "lecture_hours",
+    "tutorial_hours",
+    "practical_hours",
+    "self_study_hours",
+    "practical_component_summary",
+    "source_document_reference",
+    "source_page_start",
+    "source_page_end",
+    "source_verification_status",
+    "source_notes",
+)
 
 
 def _commit_or_conflict(db: Session, detail: str) -> None:
@@ -53,6 +73,33 @@ def _get_or_404(db: Session, model, record_id: uuid.UUID, label: str):
     if record is None:
         raise HTTPException(status_code=404, detail=f"{label} not found")
     return record
+
+
+def _subject_payload(subject: Subject) -> dict:
+    return {
+        "id": str(subject.id),
+        "code": subject.code,
+        "name": subject.name,
+        "subject_type": subject.subject_type,
+        "credits": subject.credits,
+        "description": subject.description,
+        "semester_id": str(subject.semester_id),
+        "academic_scheme_id": str(subject.academic_scheme_id),
+        "active": subject.active,
+        **{field: getattr(subject, field) for field in SUBJECT_METADATA_FIELDS},
+    }
+
+
+def _scheme_payload(scheme: AcademicScheme) -> dict:
+    return {
+        "id": str(scheme.id),
+        "name": scheme.name,
+        "code": scheme.code,
+        "active": scheme.active,
+        "college_id": str(scheme.college_id),
+        "valid_from": scheme.valid_from.isoformat() if scheme.valid_from else None,
+        "valid_to": scheme.valid_to.isoformat() if scheme.valid_to else None,
+    }
 
 
 # ---------------------------------------------------------------- branches
@@ -123,20 +170,83 @@ def deactivate_branch(
     return {"message": "Branch deactivated", "id": str(branch.id)}
 
 
+# -------------------------------------------------------------- offerings
+@router.get("/offerings")
+def list_branch_offerings(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    branch_id: uuid.UUID | None = None,
+    subject_id: uuid.UUID | None = None,
+):
+    statement = (
+        select(BranchSubjectOffering, Branch, Subject)
+        .join(Branch, Branch.id == BranchSubjectOffering.branch_id)
+        .join(Subject, Subject.id == BranchSubjectOffering.subject_id)
+    )
+    if branch_id:
+        statement = statement.where(BranchSubjectOffering.branch_id == branch_id)
+    if subject_id:
+        statement = statement.where(BranchSubjectOffering.subject_id == subject_id)
+    rows = db.execute(statement.order_by(Branch.code, Subject.code)).all()
+    return [
+        {
+            "branch_id": str(branch.id),
+            "branch_code": branch.code,
+            "subject_id": str(subject.id),
+            "subject_code": subject.code,
+            "subject_name": subject.name,
+            "active": offering.active,
+        }
+        for offering, branch, subject in rows
+    ]
+
+
+@router.post("/offerings", status_code=201)
+def create_branch_offering(
+    payload: BranchSubjectOfferingCreate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    branch = _get_or_404(db, Branch, payload.branch_id, "Branch")
+    subject = _get_or_404(db, Subject, payload.subject_id, "Subject")
+    scheme = _get_or_404(db, AcademicScheme, subject.academic_scheme_id, "Academic scheme")
+    if not branch.active or not subject.active or not scheme.active:
+        raise HTTPException(status_code=400, detail="Only active branches, schemes and subjects can be offered")
+    if branch.college_id != scheme.college_id:
+        raise HTTPException(status_code=400, detail="Branch and subject scheme belong to different colleges")
+    key = (branch.id, subject.id)
+    if db.get(BranchSubjectOffering, key) is not None:
+        raise HTTPException(status_code=409, detail="This subject is already associated with the branch")
+    offering = BranchSubjectOffering(branch_id=branch.id, subject_id=subject.id, active=True)
+    db.add(offering)
+    _commit_or_conflict(db, "This subject is already associated with the branch")
+    return {
+        "branch_id": str(branch.id),
+        "subject_id": str(subject.id),
+        "active": offering.active,
+    }
+
+
+@router.delete("/offerings/{branch_id}/{subject_id}")
+def deactivate_branch_offering(
+    branch_id: uuid.UUID,
+    subject_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    offering = db.get(BranchSubjectOffering, (branch_id, subject_id))
+    if offering is None:
+        raise HTTPException(status_code=404, detail="Branch subject offering not found")
+    offering.active = False
+    db.commit()
+    return {"message": "Branch subject offering deactivated", "active": False}
+
+
 # ----------------------------------------------------------------- schemes
 @router.get("/schemes")
 def list_schemes(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     rows = db.scalars(select(AcademicScheme).order_by(AcademicScheme.code)).all()
-    return [
-        {
-            "id": str(item.id),
-            "name": item.name,
-            "code": item.code,
-            "active": item.active,
-            "college_id": str(item.college_id),
-        }
-        for item in rows
-    ]
+    return [_scheme_payload(item) for item in rows]
 
 
 @router.post("/schemes", status_code=201)
@@ -149,11 +259,18 @@ def create_scheme(
         select(AcademicScheme).where(AcademicScheme.college_id == college.id, AcademicScheme.code == code)
     ).first():
         raise HTTPException(status_code=409, detail="An academic scheme with this code already exists")
-    scheme = AcademicScheme(college_id=college.id, name=payload.name.strip(), code=code, active=payload.active)
+    scheme = AcademicScheme(
+        college_id=college.id,
+        name=payload.name.strip(),
+        code=code,
+        valid_from=payload.valid_from,
+        valid_to=payload.valid_to,
+        active=payload.active,
+    )
     db.add(scheme)
     _commit_or_conflict(db, "An academic scheme with this code already exists")
     db.refresh(scheme)
-    return {"id": str(scheme.id), "name": scheme.name, "code": scheme.code, "active": scheme.active}
+    return _scheme_payload(scheme)
 
 
 @router.patch("/schemes/{scheme_id}")
@@ -178,11 +295,19 @@ def update_scheme(
         scheme.code = code
     if payload.name is not None:
         scheme.name = payload.name.strip()
+    valid_from = payload.valid_from if payload.valid_from is not None else scheme.valid_from
+    valid_to = payload.valid_to if payload.valid_to is not None else scheme.valid_to
+    if valid_from and valid_to and valid_to < valid_from:
+        raise HTTPException(status_code=400, detail="valid_to must be on or after valid_from")
+    if payload.valid_from is not None:
+        scheme.valid_from = payload.valid_from
+    if payload.valid_to is not None:
+        scheme.valid_to = payload.valid_to
     if payload.active is not None:
         scheme.active = payload.active
     _commit_or_conflict(db, "An academic scheme with this code already exists")
     db.refresh(scheme)
-    return {"id": str(scheme.id), "name": scheme.name, "code": scheme.code, "active": scheme.active}
+    return _scheme_payload(scheme)
 
 
 @router.delete("/schemes/{scheme_id}")
@@ -300,20 +425,7 @@ def list_subjects(
     if semester_id:
         statement = statement.where(Subject.semester_id == semester_id)
     rows = db.scalars(statement.order_by(Subject.code)).all()
-    return [
-        {
-            "id": str(item.id),
-            "code": item.code,
-            "name": item.name,
-            "subject_type": item.subject_type,
-            "credits": item.credits,
-            "description": item.description,
-            "semester_id": str(item.semester_id),
-            "academic_scheme_id": str(item.academic_scheme_id),
-            "active": item.active,
-        }
-        for item in rows
-    ]
+    return [_subject_payload(item) for item in rows]
 
 
 @router.post("/subjects", status_code=201)
@@ -339,19 +451,12 @@ def create_subject(
         credits=payload.credits,
         description=payload.description,
         active=payload.active,
+        **{field: getattr(payload, field) for field in SUBJECT_METADATA_FIELDS},
     )
     db.add(subject)
     _commit_or_conflict(db, "A subject with this code already exists in the scheme")
     db.refresh(subject)
-    return {
-        "id": str(subject.id),
-        "code": subject.code,
-        "name": subject.name,
-        "subject_type": subject.subject_type,
-        "semester_id": str(subject.semester_id),
-        "academic_scheme_id": str(subject.academic_scheme_id),
-        "active": subject.active,
-    }
+    return _subject_payload(subject)
 
 
 @router.patch("/subjects/{subject_id}")
@@ -387,22 +492,25 @@ def update_subject(
         subject.credits = payload.credits
     if payload.description is not None:
         subject.description = payload.description
+    for field in SUBJECT_METADATA_FIELDS:
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(subject, field, value)
+    if (
+        subject.source_page_start is not None
+        and subject.source_page_end is not None
+        and subject.source_page_end < subject.source_page_start
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="source_page_end must be on or after source_page_start",
+        )
     if payload.active is not None:
         subject.active = payload.active
     subject.updated_at = func.now()
     _commit_or_conflict(db, "A subject with this code already exists in the scheme")
     db.refresh(subject)
-    return {
-        "id": str(subject.id),
-        "code": subject.code,
-        "name": subject.name,
-        "subject_type": subject.subject_type,
-        "credits": subject.credits,
-        "description": subject.description,
-        "semester_id": str(subject.semester_id),
-        "academic_scheme_id": str(subject.academic_scheme_id),
-        "active": subject.active,
-    }
+    return _subject_payload(subject)
 
 
 @router.delete("/subjects/{subject_id}")
@@ -433,6 +541,7 @@ def list_elective_options(admin: User = Depends(require_admin), db: Session = De
             "subject_id": str(subject.id),
             "subject_code": subject.code,
             "subject_name": subject.name,
+            "branch_id": str(basket.branch_id) if basket.branch_id else None,
             "active": basket.active and subject.active,
         }
         for basket, _option, subject in rows
@@ -448,6 +557,7 @@ def list_elective_baskets(admin: User = Depends(require_admin), db: Session = De
             "name": item.name,
             "academic_scheme_id": str(item.academic_scheme_id),
             "semester_id": str(item.semester_id),
+            "branch_id": str(item.branch_id) if item.branch_id else None,
             "active": item.active,
         }
         for item in rows
@@ -464,21 +574,33 @@ def create_elective_basket(
     semester = _get_or_404(db, Semester, payload.semester_id, "Semester")
     if semester.academic_scheme_id != scheme.id:
         raise HTTPException(status_code=400, detail="Semester does not belong to the selected scheme")
+    branch = _get_or_404(db, Branch, payload.branch_id, "Branch") if payload.branch_id else None
+    if branch and branch.college_id != scheme.college_id:
+        raise HTTPException(status_code=400, detail="Branch and scheme belong to different colleges")
     if db.scalars(
         select(ElectiveBasket).where(
             ElectiveBasket.academic_scheme_id == scheme.id,
             ElectiveBasket.semester_id == semester.id,
+            ElectiveBasket.branch_id == branch.id if branch else ElectiveBasket.branch_id.is_(None),
             ElectiveBasket.name == payload.name.strip(),
         )
     ).first():
         raise HTTPException(status_code=409, detail="This elective basket already exists")
     basket = ElectiveBasket(
-        academic_scheme_id=scheme.id, semester_id=semester.id, name=payload.name.strip()
+        academic_scheme_id=scheme.id,
+        semester_id=semester.id,
+        branch_id=branch.id if branch else None,
+        name=payload.name.strip(),
     )
     db.add(basket)
     _commit_or_conflict(db, "This elective basket already exists")
     db.refresh(basket)
-    return {"id": str(basket.id), "name": basket.name, "active": basket.active}
+    return {
+        "id": str(basket.id),
+        "name": basket.name,
+        "branch_id": str(basket.branch_id) if basket.branch_id else None,
+        "active": basket.active,
+    }
 
 
 @router.post("/elective-options", status_code=201)
@@ -496,6 +618,10 @@ def add_elective_option(
         or subject.semester_id != basket.semester_id
     ):
         raise HTTPException(status_code=400, detail="Subject must match the basket scheme and semester")
+    if basket.branch_id:
+        offering = db.get(BranchSubjectOffering, (basket.branch_id, subject.id))
+        if offering is None or not offering.active:
+            raise HTTPException(status_code=400, detail="Subject is not offered for this branch")
     if db.get(ElectiveOption, (basket.id, subject.id)) is not None:
         raise HTTPException(status_code=409, detail="This elective option already exists")
     db.add(ElectiveOption(basket_id=basket.id, subject_id=subject.id))

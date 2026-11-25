@@ -2,7 +2,18 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,8 +36,25 @@ class SyllabusVersion(Base):
     verification_status: Mapped[VerificationStatus] = mapped_column(Enum(VerificationStatus, name="verification_status"), nullable=False, default=VerificationStatus.DRAFT)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     source_document_reference: Mapped[str | None] = mapped_column(Text)
+    source_page_start: Mapped[int | None] = mapped_column(Integer)
+    source_page_end: Mapped[int | None] = mapped_column(Integer)
+    source_verification_status: Mapped[str | None] = mapped_column(String(20))
+    source_text_imported: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-    __table_args__ = (UniqueConstraint("subject_id", "version", name="uq_syllabus_subject_version"),)
+    __table_args__ = (
+        UniqueConstraint("subject_id", "version", name="uq_syllabus_subject_version"),
+        CheckConstraint(
+            "source_verification_status IS NULL OR source_verification_status IN "
+            "('VERIFIED','NEEDS_REVIEW','NOT_AVAILABLE')",
+            name="ck_syllabus_version_source_status",
+        ),
+        CheckConstraint(
+            "source_page_start IS NULL OR source_page_end IS NULL OR source_page_end >= source_page_start",
+            name="ck_syllabus_version_source_page_range",
+        ),
+    )
 
 
 class SyllabusDocument(Base):
@@ -49,10 +77,37 @@ class Unit(Base):
     subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False)
     syllabus_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("syllabus_versions.id", ondelete="SET NULL"))
     title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    duration_hours: Mapped[int | None] = mapped_column(Integer)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_page_number: Mapped[int | None] = mapped_column(Integer)
+    source_verification_status: Mapped[str | None] = mapped_column(String(20))
     verification_status: Mapped[VerificationStatus] = mapped_column(Enum(VerificationStatus, name="verification_status"), nullable=False, default=VerificationStatus.DRAFT)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    __table_args__ = (UniqueConstraint("subject_id", "order_index", name="uq_units_subject_order"),)
+    __table_args__ = (
+        Index(
+            "uq_units_version_order",
+            "syllabus_version_id",
+            "order_index",
+            unique=True,
+            postgresql_where=text("syllabus_version_id IS NOT NULL"),
+            sqlite_where=text("syllabus_version_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_units_legacy_subject_order",
+            "subject_id",
+            "order_index",
+            unique=True,
+            postgresql_where=text("syllabus_version_id IS NULL"),
+            sqlite_where=text("syllabus_version_id IS NULL"),
+        ),
+        CheckConstraint("duration_hours IS NULL OR duration_hours >= 0", name="ck_unit_duration_nonnegative"),
+        CheckConstraint(
+            "source_verification_status IS NULL OR source_verification_status IN "
+            "('VERIFIED','NEEDS_REVIEW','NOT_AVAILABLE')",
+            name="ck_unit_source_status",
+        ),
+    )
 
 
 class Topic(Base):
@@ -60,10 +115,21 @@ class Topic(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     unit_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("units.id", ondelete="CASCADE"), nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="SYLLABUS")
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_page_number: Mapped[int | None] = mapped_column(Integer)
+    source_verification_status: Mapped[str | None] = mapped_column(String(20))
     verification_status: Mapped[VerificationStatus] = mapped_column(Enum(VerificationStatus, name="verification_status"), nullable=False, default=VerificationStatus.DRAFT)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    __table_args__ = (UniqueConstraint("unit_id", "order_index", name="uq_topics_unit_order"),)
+    __table_args__ = (
+        UniqueConstraint("unit_id", "order_index", name="uq_topics_unit_order"),
+        CheckConstraint("kind IN ('SYLLABUS','SELF_LEARNING','PRACTICAL')", name="ck_topic_kind"),
+        CheckConstraint(
+            "source_verification_status IS NULL OR source_verification_status IN "
+            "('VERIFIED','NEEDS_REVIEW','NOT_AVAILABLE')",
+            name="ck_topic_source_status",
+        ),
+    )
 
 
 class Subtopic(Base):
@@ -72,5 +138,15 @@ class Subtopic(Base):
     topic_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("topics.id", ondelete="CASCADE"), nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_page_number: Mapped[int | None] = mapped_column(Integer)
+    source_verification_status: Mapped[str | None] = mapped_column(String(20))
     verification_status: Mapped[VerificationStatus] = mapped_column(Enum(VerificationStatus, name="verification_status"), nullable=False, default=VerificationStatus.DRAFT)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    __table_args__ = (
+        UniqueConstraint("topic_id", "order_index", name="uq_subtopics_topic_order"),
+        CheckConstraint(
+            "source_verification_status IS NULL OR source_verification_status IN "
+            "('VERIFIED','NEEDS_REVIEW','NOT_AVAILABLE')",
+            name="ck_subtopic_source_status",
+        ),
+    )

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -19,6 +19,7 @@ from app.database.connection import get_db
 from app.models.academic import (
     AcademicScheme,
     Branch,
+    BranchSubjectOffering,
     ElectiveBasket,
     ElectiveOption,
     Semester,
@@ -108,6 +109,72 @@ def _enrolled_subjects(db: Session, profile: StudentProfile) -> list[Subject]:
     ).all()
     order = {subject_id: index for index, subject_id in enumerate(subject_ids)}
     return sorted(subjects, key=lambda subject: order.get(subject.id, len(order)))
+
+
+def _core_subjects_for_branch(
+    db: Session,
+    branch: Branch | None,
+    scheme: AcademicScheme,
+    semester: Semester,
+) -> list[Subject]:
+    statement = select(Subject).where(
+        Subject.academic_scheme_id == scheme.id,
+        Subject.semester_id == semester.id,
+        Subject.subject_type == "CORE",
+        Subject.active.is_(True),
+        or_(
+            Subject.source_verification_status.is_(None),
+            Subject.source_verification_status == "VERIFIED",
+        ),
+    )
+    if branch:
+        offered_ids = db.scalars(
+            select(BranchSubjectOffering.subject_id)
+            .join(Subject, Subject.id == BranchSubjectOffering.subject_id)
+            .where(
+                BranchSubjectOffering.branch_id == branch.id,
+                BranchSubjectOffering.active.is_(True),
+                Subject.academic_scheme_id == scheme.id,
+                Subject.semester_id == semester.id,
+                Subject.active.is_(True),
+            )
+        ).all()
+        if offered_ids:
+            statement = statement.where(Subject.id.in_(offered_ids))
+    return db.scalars(statement).all()
+
+
+def _has_elective_option_for_branch(
+    db: Session,
+    subject: Subject,
+    scheme: AcademicScheme,
+    semester: Semester,
+    branch: Branch | None,
+) -> bool:
+    branch_scope = (
+        or_(ElectiveBasket.branch_id == branch.id, ElectiveBasket.branch_id.is_(None))
+        if branch
+        else ElectiveBasket.branch_id.is_(None)
+    )
+    return (
+        db.scalars(
+            select(ElectiveOption)
+            .join(ElectiveBasket, ElectiveBasket.id == ElectiveOption.basket_id)
+            .join(Subject, Subject.id == ElectiveOption.subject_id)
+            .where(
+                ElectiveOption.subject_id == subject.id,
+                ElectiveBasket.academic_scheme_id == scheme.id,
+                ElectiveBasket.semester_id == semester.id,
+                ElectiveBasket.active.is_(True),
+                or_(
+                    Subject.source_verification_status.is_(None),
+                    Subject.source_verification_status == "VERIFIED",
+                ),
+                branch_scope,
+            )
+        ).first()
+        is not None
+    )
 
 
 def _subject_summaries(db: Session, profile: StudentProfile) -> list[dict]:
@@ -330,6 +397,8 @@ def student_onboarding(
         raise HTTPException(status_code=400, detail="Invalid department")
     if not scheme or not scheme.active:
         raise HTTPException(status_code=400, detail="Invalid academic scheme")
+    if branch.college_id != scheme.college_id:
+        raise HTTPException(status_code=400, detail="Branch and academic scheme belong to different colleges")
     if not semester or not semester.active or semester.academic_scheme_id != scheme.id:
         raise HTTPException(status_code=400, detail="Invalid semester")
 
@@ -349,12 +418,7 @@ def student_onboarding(
             or elective.semester_id != semester.id
         ):
             raise HTTPException(status_code=400, detail="Invalid elective for this academic configuration")
-        elective_option = db.scalars(
-            select(ElectiveOption).where(
-                ElectiveOption.subject_id == elective.id,
-            )
-        ).first()
-        if not elective_option:
+        if not _has_elective_option_for_branch(db, elective, scheme, semester, branch):
             raise HTTPException(status_code=400, detail="Selected subject is not an elective option")
 
     profile = db.scalars(select(StudentProfile).where(StudentProfile.user_id == user.id)).first()
@@ -376,14 +440,7 @@ def student_onboarding(
     user.full_name = payload.full_name
     db.flush()
 
-    for subject in db.scalars(
-        select(Subject).where(
-            Subject.academic_scheme_id == scheme.id,
-            Subject.semester_id == semester.id,
-            Subject.subject_type == "CORE",
-            Subject.active.is_(True),
-        )
-    ).all():
+    for subject in _core_subjects_for_branch(db, branch, scheme, semester):
         enrollment = db.scalars(
             select(StudentSubjectEnrollment).where(
                 StudentSubjectEnrollment.student_profile_id == profile.id,
@@ -726,6 +783,8 @@ def update_student_profile(
         raise HTTPException(status_code=400, detail="Invalid academic scheme")
     if payload.current_semester_id and (semester is None or not semester.active):
         raise HTTPException(status_code=400, detail="Invalid semester")
+    if branch and scheme and branch.college_id != scheme.college_id:
+        raise HTTPException(status_code=400, detail="Branch and academic scheme belong to different colleges")
     if scheme and semester and semester.academic_scheme_id != scheme.id:
         raise HTTPException(status_code=400, detail="Semester does not belong to the selected scheme")
 
@@ -744,10 +803,9 @@ def update_student_profile(
                 raise HTTPException(status_code=400, detail="Invalid elective for this academic configuration")
             elective = None
         else:
-            option = db.scalars(
-                select(ElectiveOption).where(ElectiveOption.subject_id == elective.id)
-            ).first()
-            if option is None:
+            if not scheme or not semester or not _has_elective_option_for_branch(
+                db, elective, scheme, semester, branch
+            ):
                 if payload.selected_elective_id:
                     raise HTTPException(status_code=400, detail="Selected subject is not an elective option")
                 elective = None
@@ -767,14 +825,7 @@ def update_student_profile(
             row.active = (
                 row.semester_id == semester.id and row.academic_scheme_id == scheme.id
             )
-        desired_subjects = db.scalars(
-            select(Subject).where(
-                Subject.academic_scheme_id == scheme.id,
-                Subject.semester_id == semester.id,
-                Subject.subject_type == "CORE",
-                Subject.active.is_(True),
-            )
-        ).all()
+        desired_subjects = _core_subjects_for_branch(db, branch, scheme, semester)
         desired = [(subject, False) for subject in desired_subjects]
         if elective:
             desired.append((elective, True))
