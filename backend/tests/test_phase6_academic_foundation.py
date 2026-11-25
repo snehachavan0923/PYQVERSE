@@ -27,6 +27,7 @@ from app.models.academic import (
     Subject,
 )
 from app.models.syllabus import Subtopic, SyllabusVersion, Topic, Unit, VerificationStatus
+from app.schemas.academic import AcademicSchemeResponse
 from app.services.academic_syllabus_import import import_semester_iii, validate_import_data
 from app.services.seed_academic_catalog import _static_dry_run_report
 
@@ -68,6 +69,24 @@ def test_source_catalog_covers_only_semester_iii_and_marks_credit_conflict():
     assert "states total credits 2" in bridge["source_notes"]
     lab = next(item for item in SEMESTER_III_SUBJECTS if item["code"] == "CS238DL")
     assert lab["units"] == ()
+
+
+def test_academic_scheme_response_preserves_public_fields():
+    college_id = uuid.uuid4()
+    payload = AcademicSchemeResponse(
+        id=uuid.uuid4(),
+        college_id=college_id,
+        name="2025 Academic Scheme",
+        code="2025",
+        active=True,
+        valid_from=None,
+        valid_to=None,
+    )
+
+    assert payload.college_id == college_id
+    assert payload.name == "2025 Academic Scheme"
+    assert payload.code == "2025"
+    assert payload.active is True
 
 
 def test_source_file_and_complete_syllabus_hierarchy_are_pinned():
@@ -317,8 +336,24 @@ def test_dry_run_rolls_back_all_rows(db):
     report = import_semester_iii(db, apply=False)
 
     assert report["mode"] == "dry-run"
+    assert report["database_touched"] is False
     assert db.scalar(select(func.count()).select_from(Subject)) == 0
     assert db.scalar(select(func.count()).select_from(SyllabusVersion)) == 0
+
+
+def test_dry_run_performs_no_database_session_operations():
+    class ReadOnlySession:
+        def __getattr__(self, name):
+            if name in {"add", "flush", "commit", "rollback", "delete"}:
+                def forbidden(*args, **kwargs):
+                    raise AssertionError(f"dry-run called db.{name}")
+                return forbidden
+            raise AttributeError(name)
+
+    report = import_semester_iii(ReadOnlySession(), apply=False)
+
+    assert report["mode"] == "dry-run"
+    assert report["database_touched"] is False
 
 
 class ScalarResult:
@@ -401,6 +436,30 @@ def test_student_hierarchy_reads_require_matching_active_enrollment_and_branch_o
             subject,
         )
     assert exc.value.status_code == 403
+
+
+def test_legacy_unversioned_units_remain_compatible():
+    legacy_unit = type(
+        "LegacyUnitStub",
+        (),
+        {
+            "active": True,
+            "verification_status": VerificationStatus.VERIFIED,
+            "syllabus_version_id": None,
+            "source_verification_status": None,
+        },
+    )()
+
+    class EmptyDB:
+        def scalars(self, statement):
+            raise AssertionError("Legacy units must not require a syllabus version lookup")
+
+    _require_published_version(EmptyDB(), legacy_unit)
+
+    legacy_unit.source_verification_status = "NEEDS_REVIEW"
+    with pytest.raises(HTTPException) as exc:
+        _require_published_version(EmptyDB(), legacy_unit)
+    assert exc.value.status_code == 404
 
 
 def test_unpublished_or_unverified_units_are_not_returned():

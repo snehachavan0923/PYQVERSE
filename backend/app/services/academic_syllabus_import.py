@@ -1,5 +1,6 @@
 import uuid
 from collections import defaultdict
+from collections import Counter
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -426,6 +427,36 @@ def import_semester_iii(db: Session, *, apply: bool = False) -> dict:
         "records": [],
         "conflicts": [],
     }
+    if not apply:
+        report["database_touched"] = False
+        report["planned"] = dict(
+            Counter(
+                {
+                    "academic_hierarchy": 4,
+                    "subjects": len(SEMESTER_III_SUBJECTS),
+                    "branch_offerings": len(SEMESTER_III_SUBJECTS),
+                    "elective_options": 3,
+                    "syllabus_versions": len(SEMESTER_III_SUBJECTS),
+                    "units": sum(
+                        len(subject["units"])
+                        for subject in SEMESTER_III_SUBJECTS
+                    ),
+                    "topics": sum(
+                        len(unit["topics"])
+                        for subject in SEMESTER_III_SUBJECTS
+                        for unit in subject["units"]
+                    ),
+                    "subtopics": sum(
+                        len(topic.get("subtopics", ()))
+                        for subject in SEMESTER_III_SUBJECTS
+                        for unit in subject["units"]
+                        for topic in unit["topics"]
+                    ),
+                }
+            )
+        )
+        report["note"] = "No database connection or write was made."
+        return _finalize_report(report)
     try:
         college = _ensure_identity(
             db,
@@ -543,10 +574,7 @@ def import_semester_iii(db: Session, *, apply: bool = False) -> dict:
                             report,
                         )
 
-        if apply:
-            db.commit()
-        else:
-            db.rollback()
+        db.commit()
         return _finalize_report(report)
     except IntegrityError:
         db.rollback()

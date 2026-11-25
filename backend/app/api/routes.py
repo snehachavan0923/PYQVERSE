@@ -130,15 +130,29 @@ def list_units(
     _require_student_subject_access(db, student, subject)
     return db.scalars(
         select(Unit)
-        .join(SyllabusVersion, SyllabusVersion.id == Unit.syllabus_version_id)
+        .outerjoin(SyllabusVersion, SyllabusVersion.id == Unit.syllabus_version_id)
         .where(
             Unit.subject_id == subject.id,
             Unit.active.is_(True),
             Unit.verification_status == VerificationStatus.VERIFIED,
-            Unit.source_verification_status == "VERIFIED",
-            SyllabusVersion.active.is_(True),
-            SyllabusVersion.verification_status == VerificationStatus.VERIFIED,
-            SyllabusVersion.source_verification_status == "VERIFIED",
+            or_(
+                (
+                    Unit.syllabus_version_id.is_(None)
+                    & (
+                        Unit.source_verification_status.is_(None)
+                        | (Unit.source_verification_status == "VERIFIED")
+                    )
+                ),
+                (
+                    SyllabusVersion.active.is_(True)
+                    & (SyllabusVersion.verification_status == VerificationStatus.VERIFIED)
+                    & (SyllabusVersion.source_verification_status == "VERIFIED")
+                    & (
+                        Unit.source_verification_status.is_(None)
+                        | (Unit.source_verification_status == "VERIFIED")
+                    )
+                ),
+            ),
         )
         .order_by(Unit.order_index)
     ).all()
@@ -158,12 +172,20 @@ def list_topics(
         raise HTTPException(status_code=404, detail="Subject not found")
     _require_student_subject_access(db, student, subject)
     _require_published_version(db, unit)
+    source_status = (
+        Topic.source_verification_status == "VERIFIED"
+        if unit.syllabus_version_id is not None
+        else or_(
+            Topic.source_verification_status.is_(None),
+            Topic.source_verification_status == "VERIFIED",
+        )
+    )
     return db.scalars(
         select(Topic).where(
             Topic.unit_id == unit.id,
             Topic.active.is_(True),
             Topic.verification_status == VerificationStatus.VERIFIED,
-            Topic.source_verification_status == "VERIFIED",
+            source_status,
         ).order_by(Topic.order_index)
     ).all()
 
@@ -191,7 +213,10 @@ def list_subtopics(
     if (
         not topic.active
         or topic.verification_status != VerificationStatus.VERIFIED
-        or topic.source_verification_status != "VERIFIED"
+    ):
+        raise HTTPException(status_code=404, detail="Topic not found")
+    if unit.syllabus_version_id is not None and (
+        topic.source_verification_status != "VERIFIED"
     ):
         raise HTTPException(status_code=404, detail="Topic not found")
     return db.scalars(
@@ -200,7 +225,14 @@ def list_subtopics(
             Subtopic.topic_id == topic.id,
             Subtopic.active.is_(True),
             Subtopic.verification_status == VerificationStatus.VERIFIED,
-            Subtopic.source_verification_status == "VERIFIED",
+            (
+                or_(
+                    Subtopic.source_verification_status.is_(None),
+                    Subtopic.source_verification_status == "VERIFIED",
+                )
+                if unit.syllabus_version_id is None
+                else Subtopic.source_verification_status == "VERIFIED"
+            ),
         )
         .order_by(Subtopic.order_index)
     ).all()
@@ -237,6 +269,10 @@ def _require_student_subject_access(db: Session, student: User, subject: Subject
 def _require_published_version(db: Session, unit: Unit) -> None:
     if not unit.active or unit.verification_status != VerificationStatus.VERIFIED:
         raise HTTPException(status_code=404, detail="Unit not found")
+    if unit.syllabus_version_id is None:
+        if unit.source_verification_status not in (None, "VERIFIED"):
+            raise HTTPException(status_code=404, detail="Unit not found")
+        return
     version_id = db.scalars(
         select(SyllabusVersion.id).where(
             SyllabusVersion.id == unit.syllabus_version_id,

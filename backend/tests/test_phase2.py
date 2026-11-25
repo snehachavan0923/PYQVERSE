@@ -99,4 +99,9 @@ def test_health_and_academic_api():
 
     subjects = client.get("/api/v1/subjects")
     assert subjects.status_code == 200
-    assert len(subjects.json()) == 8
+    subject_codes = {item["code"] for item in subjects.json()}
+    assert len(subject_codes) == 10
+    assert subject_codes == {
+        "MA231TC", "CV232TA", "ME232TB", "BT232TD", "CS233AI",
+        "CS234AI", "CS235AT", "CS236AT", "CS238DL", "MAT149AT",
+    }

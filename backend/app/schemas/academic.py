@@ -15,6 +15,7 @@ class BranchResponse(BaseModel):
 class AcademicSchemeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    college_id: uuid.UUID
     name: str
     code: str
     valid_from: date | None = None
