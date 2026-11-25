@@ -280,6 +280,41 @@ def test_invalid_password_is_rejected(monkeypatch):
     assert exc.value.detail == "Invalid email or password"
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [
+        (RuntimeError("network unavailable"), 503),
+        (AuthApiError("temporarily unavailable", 503, "unexpected_failure"), 503),
+        (AuthApiError("rate limited", 429, "over_request_rate_limit"), 429),
+    ],
+)
+def test_password_login_reports_auth_service_failures_without_mislabeling_credentials(
+    monkeypatch,
+    failure,
+    expected_status,
+):
+    class FakeAuth:
+        def sign_in_with_password(self, _credentials):
+            raise failure
+
+    monkeypatch.setattr(auth_routes, "rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        auth_routes,
+        "create_supabase_anon_client",
+        lambda: SimpleNamespace(auth=FakeAuth()),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        auth_routes.login(
+            LoginRequest(email="student@rvce.edu.in", password="StrongPass1"),
+            _request(),
+            FakeDB(),
+        )
+
+    assert exc.value.status_code == expected_status
+    assert exc.value.status_code != 401
+
+
 def test_unverified_password_login_is_rejected_with_confirmation_message(monkeypatch):
     class FakeAuth:
         def sign_in_with_password(self, credentials):
@@ -411,6 +446,60 @@ def test_invalid_or_expired_supabase_jwt_is_rejected(monkeypatch, message, code)
 
     assert exc.value.status_code == 401
     assert exc.value.detail == "Invalid or expired session"
+
+
+def test_supabase_token_validation_service_failure_is_not_reported_as_expired(monkeypatch):
+    class FakeAuth:
+        def get_user(self, _token):
+            raise RuntimeError("network unavailable")
+
+    monkeypatch.setattr(
+        "app.services.auth.create_supabase_anon_client",
+        lambda: SimpleNamespace(auth=FakeAuth()),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        supabase_user("valid-token")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Authentication service is temporarily unavailable"
+
+
+def test_authenticated_supabase_user_without_application_account_is_forbidden(monkeypatch):
+    auth_id = uuid.uuid4()
+
+    class FakeAuth:
+        def get_user(self, token):
+            assert token == "valid-supabase-token"
+            return SimpleNamespace(
+                user=SimpleNamespace(
+                    id=str(auth_id),
+                    email="unregistered@rvce.edu.in",
+                    email_confirmed_at="confirmed",
+                )
+            )
+
+    monkeypatch.setattr(
+        "app.services.auth.create_supabase_anon_client",
+        lambda: SimpleNamespace(auth=FakeAuth()),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        synchronized_user(FakeDB([[], []]), "valid-supabase-token")
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Profile not found. Complete registration first."
+
+
+def test_student_dashboard_requires_an_application_profile(monkeypatch):
+    student = SimpleNamespace(id=uuid.uuid4(), role=UserRole.STUDENT)
+    monkeypatch.setattr(auth_routes, "synchronized_user", lambda db, token: (student, None))
+
+    with pytest.raises(HTTPException) as exc:
+        auth_routes.student_dashboard("valid-token", FakeDB([[]]))
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Student onboarding is required"
 
 
 def test_service_role_key_is_not_in_frontend_source():

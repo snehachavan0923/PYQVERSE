@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime
 
@@ -35,6 +36,7 @@ router = APIRouter(tags=["content"])
 
 VALID_STATUSES = {status.value for status in VerificationStatus}
 RESOURCE_TYPES = {item.value for item in ResourceType}
+PYQ_HASH_CONSTRAINT = "uq_uploaded_documents_active_content_sha256"
 
 
 # ----------------------------------------------------------------- helpers
@@ -79,6 +81,59 @@ def _subject_context(db: Session, subject: Subject) -> tuple[AcademicScheme, Sem
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def _active_pyq_with_hash(
+    db: Session,
+    content_sha256: str,
+    *,
+    exclude_paper_id: uuid.UUID | None = None,
+) -> QuestionPaper | None:
+    statement = (
+        select(QuestionPaper)
+        .join(UploadedDocument, UploadedDocument.id == QuestionPaper.uploaded_document_id)
+        .where(
+            UploadedDocument.content_sha256 == content_sha256,
+            UploadedDocument.active.is_(True),
+        )
+    )
+    if exclude_paper_id is not None:
+        statement = statement.where(QuestionPaper.id != exclude_paper_id)
+    return db.scalars(statement).first()
+
+
+def _legacy_active_pyqs_same_size(db: Session, file_size: int):
+    statement = (
+        select(QuestionPaper, UploadedDocument)
+        .join(UploadedDocument, UploadedDocument.id == QuestionPaper.uploaded_document_id)
+        .where(
+            UploadedDocument.content_sha256.is_(None),
+            UploadedDocument.active.is_(True),
+            UploadedDocument.file_type == "pdf",
+            UploadedDocument.file_size == file_size,
+        )
+    )
+    return db.execute(statement).all()
+
+
+def _is_active_pyq_hash_conflict(exc: IntegrityError) -> bool:
+    original = getattr(exc, "orig", None)
+    diagnostic = getattr(original, "diag", None)
+    return getattr(diagnostic, "constraint_name", None) == PYQ_HASH_CONSTRAINT
+
+
+def _matches_legacy_pyq(db: Session, file_size: int, content_sha256: str) -> bool:
+    for _paper, document in _legacy_active_pyqs_same_size(db, file_size):
+        try:
+            existing_data = storage.download_bytes(document.storage_path)
+        except storage.StorageError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="An existing question paper could not be verified. Please retry later.",
+            ) from exc
+        if hashlib.sha256(existing_data).hexdigest() == content_sha256:
+            return True
+    return False
 
 
 def _syllabus_payload(
@@ -355,27 +410,27 @@ async def admin_upload_pyq(
     clean_title = clean_text(title, field="Title", max_length=300)
     clean_description = clean_text(description, field="Description", max_length=4000)
 
-    duplicate = db.scalars(
-        select(QuestionPaper)
-        .join(UploadedDocument, UploadedDocument.id == QuestionPaper.uploaded_document_id)
-        .where(
-            QuestionPaper.subject_id == subject.id,
-            QuestionPaper.exam_type == ExamType(normalized_exam),
-            QuestionPaper.examination_year == examination_year,
-            QuestionPaper.cie_number == cie_number,
-            UploadedDocument.active.is_(True),
-        )
-    ).first()
-    if duplicate:
-        raise HTTPException(status_code=409, detail="A matching question paper already exists")
-
     data = await _read_upload(file)
     extension, mime = validate_file(
         category="pyq", filename=file.filename, content_type=file.content_type, size=len(data)
     )
-    path = safe_object_path("pyq", scheme_id=scheme.id, subject_id=subject.id, extension=extension)
-    storage.upload_bytes(path, data, mime)
+    content_sha256 = hashlib.sha256(data).hexdigest()
+    duplicate = _active_pyq_with_hash(db, content_sha256)
     try:
+        legacy_duplicate = _matches_legacy_pyq(db, len(data), content_sha256)
+    except HTTPException:
+        db.rollback()
+        raise
+    if duplicate or legacy_duplicate:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="An active question paper with identical PDF content already exists",
+        )
+
+    path = safe_object_path("pyq", scheme_id=scheme.id, subject_id=subject.id, extension=extension)
+    try:
+        storage.upload_bytes(path, data, mime)
         document = UploadedDocument(
             original_filename=safe_original_filename(file.filename),
             title=clean_title,
@@ -383,6 +438,7 @@ async def admin_upload_pyq(
             file_type=extension,
             file_size=len(data),
             storage_path=path,
+            content_sha256=content_sha256,
             subject_id=subject.id,
             academic_scheme_id=scheme.id,
             semester_id=semester.id,
@@ -416,7 +472,12 @@ async def admin_upload_pyq(
     except IntegrityError as exc:
         db.rollback()
         _cleanup(path)
-        raise HTTPException(status_code=409, detail="This question paper conflicts with an existing record") from exc
+        if _is_active_pyq_hash_conflict(exc):
+            raise HTTPException(
+                status_code=409,
+                detail="An active question paper with identical PDF content already exists",
+            ) from exc
+        raise
     except Exception:
         db.rollback()
         _cleanup(path)
@@ -439,14 +500,47 @@ def admin_update_pyq(
         raise HTTPException(status_code=404, detail="Question paper file record not found")
     previous_status = document.verification_status
     data = payload.model_dump(exclude_unset=True)
+    publication = (
+        _status(str(data["status"]))
+        if "status" in data and data["status"] is not None
+        else None
+    )
+    is_reactivating = data.get("active") is True or (
+        publication == VerificationStatus.VERIFIED
+        and previous_status != VerificationStatus.VERIFIED
+    )
+    if not document.active and is_reactivating:
+        content_sha256 = document.content_sha256
+        if content_sha256 is None:
+            try:
+                existing_data = storage.download_bytes(document.storage_path)
+            except storage.StorageError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="The archived question paper could not be verified. Please retry later.",
+                ) from exc
+            content_sha256 = hashlib.sha256(existing_data).hexdigest()
+        duplicate = _active_pyq_with_hash(
+            db, content_sha256, exclude_paper_id=paper.id
+        )
+        try:
+            legacy_duplicate = _matches_legacy_pyq(db, document.file_size, content_sha256)
+        except HTTPException:
+            db.rollback()
+            raise
+        if duplicate or legacy_duplicate:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="An active question paper with identical PDF content already exists",
+            )
     if "title" in data:
         paper.title = clean_text(data["title"], field="Title", max_length=300)
         document.title = paper.title
     if "description" in data:
         paper.description = clean_text(data["description"], field="Description", max_length=4000)
         document.description = paper.description
-    if "status" in data and data["status"] is not None:
-        publication = _status(str(data["status"]))
+    if publication is not None:
         document.verification_status = publication
         document.permission_status = (
             PermissionStatus.APPROVED if publication == VerificationStatus.VERIFIED else PermissionStatus.PENDING
@@ -455,7 +549,16 @@ def admin_update_pyq(
             document.active = True
     if "active" in data and data["active"] is not None:
         document.active = bool(data["active"])
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if _is_active_pyq_hash_conflict(exc):
+            raise HTTPException(
+                status_code=409,
+                detail="An active question paper with identical PDF content already exists",
+            ) from exc
+        raise
     db.refresh(paper)
     db.refresh(document)
     return _pyq_payload(paper, document, db.get(Subject, paper.subject_id))

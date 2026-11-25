@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import api, { SESSION_EXPIRED_EVENT } from '../services/api'
+import { friendlyError } from '../services/errors'
 import notifications from '../services/notification'
 import { supabase } from '../services/supabase'
 import type { AuthProfile, AuthSession } from '../types/auth'
@@ -16,7 +17,9 @@ interface AuthContextValue {
   session: AuthSession | null
   profile: AuthProfile | null
   loading: boolean
+  restoreError: string | null
   setSession: (session: AuthSession | null) => void
+  retryRestore: () => void
   logout: () => Promise<void>
 }
 
@@ -33,10 +36,15 @@ function restoreStoredSession(): Promise<AuthSession | null> {
   const restore = (async () => {
     try {
       const previous = JSON.parse(saved) as AuthSession
-      if (!previous.refresh_token) return null
+      if (!previous.refresh_token) {
+        localStorage.removeItem('pyqverse_session')
+        return null
+      }
 
       const refreshed = await api.post<Omit<AuthSession, 'profile'>>('/auth/refresh', {
         refresh_token: previous.refresh_token,
+      }, {
+        timeout: 20_000,
       })
       const currentUser = await api.get<{
         id: string
@@ -44,7 +52,17 @@ function restoreStoredSession(): Promise<AuthSession | null> {
         onboarding_completed: boolean
       }>('/auth/me', {
         headers: { Authorization: `Bearer ${refreshed.data.access_token}` },
+        timeout: 20_000,
       })
+
+      if (
+        !refreshed.data.access_token ||
+        !refreshed.data.refresh_token ||
+        !currentUser.data.id ||
+        !['STUDENT', 'ADMIN_FACULTY'].includes(currentUser.data.role)
+      ) {
+        throw new Error('The server returned an incomplete session.')
+      }
 
       return {
         ...refreshed.data,
@@ -54,41 +72,55 @@ function restoreStoredSession(): Promise<AuthSession | null> {
           onboarding_completed: currentUser.data.onboarding_completed,
         },
       }
-    } catch {
-      localStorage.removeItem('pyqverse_session')
-      return null
+    } catch (error) {
+      const status = (error as { response?: { status?: number } })?.response?.status
+      if (status === 400 || status === 401) {
+        localStorage.removeItem('pyqverse_session')
+        return null
+      }
+      throw error
     }
   })()
 
   sessionRestoreInFlight = restore
-  void restore.finally(() => {
+  const clearInFlight = () => {
     if (sessionRestoreInFlight === restore) sessionRestoreInFlight = null
-  })
+  }
+  void restore.then(clearInFlight, clearInFlight)
   return restore
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSessionState] = useState<AuthSession | null>(null)
   const [loading, setLoading] = useState(true)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
 
   const setSession = useCallback((value: AuthSession | null) => {
     setSessionState(value)
+    if (value) setRestoreError(null)
     if (value) localStorage.setItem('pyqverse_session', JSON.stringify(value))
     else localStorage.removeItem('pyqverse_session')
   }, [])
 
-  useEffect(() => {
-    let active = true
-
-    const restoreSession = async () => {
-      try {
-        const restored = await restoreStoredSession()
-        if (active) setSession(restored)
-      } finally {
-        if (active) setLoading(false)
-      }
+  const restoreSession = useCallback(async () => {
+    setLoading(true)
+    setRestoreError(null)
+    try {
+      setSession(await restoreStoredSession())
+    } catch (error) {
+      setRestoreError(
+        friendlyError(error, 'Unable to restore your session. Check your connection and retry.'),
+      )
+    } finally {
+      setLoading(false)
     }
+  }, [setSession])
 
+  const retryRestore = useCallback(() => {
+    void restoreSession()
+  }, [restoreSession])
+
+  useEffect(() => {
     void restoreSession()
 
     let notifiedExpiry = false
@@ -110,11 +142,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : { data: { subscription: { unsubscribe: () => undefined } } }
 
     return () => {
-      active = false
       window.removeEventListener(SESSION_EXPIRED_EVENT, handleExpiry)
       data.subscription.unsubscribe()
     }
-  }, [setSession])
+  }, [restoreSession, setSession])
 
   const logout = useCallback(async () => {
     if (session?.access_token) {
@@ -136,8 +167,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [session, setSession])
 
   const value = useMemo(
-    () => ({ session, profile: session?.profile ?? null, loading, setSession, logout }),
-    [session, loading, setSession, logout],
+    () => ({
+      session,
+      profile: session?.profile ?? null,
+      loading,
+      restoreError,
+      setSession,
+      retryRestore,
+      logout,
+    }),
+    [session, loading, restoreError, setSession, retryRestore, logout],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

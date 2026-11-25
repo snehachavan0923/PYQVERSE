@@ -1,14 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from '../components/ProtectedRoute'
 
 const authState = vi.hoisted(() => ({
   session: null as Record<string, unknown> | null,
+  restoreError: null as string | null,
+  retryRestore: vi.fn(),
 }))
 
 vi.mock('../context/AuthContext', () => ({
-  useAuth: () => ({ session: authState.session, loading: false }),
+  useAuth: () => ({
+    session: authState.session,
+    loading: false,
+    restoreError: authState.restoreError,
+    retryRestore: authState.retryRestore,
+  }),
 }))
 
 vi.mock('../services/notification', () => ({
@@ -47,6 +54,8 @@ function renderAdminRoute() {
 
 beforeEach(() => {
   authState.session = makeSession('STUDENT')
+  authState.restoreError = null
+  authState.retryRestore.mockClear()
 })
 
 describe('ProtectedRoute role enforcement', () => {
@@ -66,5 +75,16 @@ describe('ProtectedRoute role enforcement', () => {
     authState.session = null
     renderAdminRoute()
     expect(screen.getByText('Login page')).toBeInTheDocument()
+  })
+
+  it('does not redirect during a retryable session restoration failure', () => {
+    authState.session = null
+    authState.restoreError = 'Unable to reach the PYQVERSE server'
+    renderAdminRoute()
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Unable to reach the PYQVERSE server')
+    expect(screen.queryByText('Login page')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(authState.retryRestore).toHaveBeenCalledOnce()
   })
 })

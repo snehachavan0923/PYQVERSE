@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import notifications from '../services/notification'
+import { ErrorState } from './PageState'
 
 interface ProtectedRouteProps {
   role?: 'STUDENT' | 'ADMIN_FACULTY'
@@ -18,7 +19,7 @@ function RouteLoading() {
 }
 
 export default function ProtectedRoute({ role, requireOnboarding = false }: ProtectedRouteProps) {
-  const { session, loading } = useAuth()
+  const { session, loading, restoreError, retryRestore } = useAuth()
   const location = useLocation()
   const actualRole = session?.profile.role
   const denied = Boolean(session && role && actualRole && actualRole !== role)
@@ -33,6 +34,7 @@ export default function ProtectedRoute({ role, requireOnboarding = false }: Prot
   }, [denied, actualRole, role, location.pathname])
 
   if (loading) return <RouteLoading />
+  if (restoreError) return <ErrorState message={restoreError} onRetry={retryRestore} />
   if (!session) return <Navigate to="/login" replace state={{ from: location.pathname }} />
   if (role && actualRole !== role) {
     return <Navigate to={actualRole === 'ADMIN_FACULTY' ? '/admin' : '/student'} replace />

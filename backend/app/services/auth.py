@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import create_supabase_anon_client
+from app.core.security import create_supabase_anon_client, log_supabase_auth_error
 from app.models.academic import StudentProfile
 from app.models.user import AccountStatus, User, UserRole
 
@@ -15,6 +15,17 @@ def supabase_user(access_token: str) -> Any:
         response = create_supabase_anon_client().auth.get_user(access_token)
         return response.user
     except Exception as exc:
+        status_code, _ = log_supabase_auth_error("token-validation", exc)
+        if status_code == 429:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service is temporarily unavailable",
+            ) from exc
+        if status_code is None or status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service is temporarily unavailable",
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired session",

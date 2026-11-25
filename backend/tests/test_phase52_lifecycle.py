@@ -51,11 +51,23 @@ class LookupDB:
         return self.lookup.get(key)
 
     def scalars(self, _query):
+        if "uploaded_documents.content_sha256" in str(_query):
+            return ScalarResult([])
         if self.scalar_values:
             return ScalarResult(self.scalar_values.pop(0))
         return ScalarResult([])
 
-    def execute(self, _query):
+    def execute(self, query):
+        if "pg_advisory_xact_lock" in str(query):
+            return RowResult([])
+        if "uploaded_documents.content_sha256 IS NULL" in str(query):
+            return RowResult(
+                [
+                    (paper, document)
+                    for paper, document in self.rows
+                    if document.active and document.content_sha256 is None
+                ]
+            )
         return RowResult(self.rows)
 
     def add(self, value):
@@ -124,6 +136,7 @@ def _pyq(subject_id, *, active=True, status=VerificationStatus.DRAFT):
         original_filename="paper.pdf",
         file_type="pdf",
         file_size=100,
+        content_sha256="a" * 64,
         title="Question paper",
         description=None,
         active=active,

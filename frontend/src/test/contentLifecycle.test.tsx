@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const mocks = vi.hoisted(() => ({
@@ -13,14 +13,16 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   error: vi.fn(),
   retryError: vi.fn(),
+  useAuth: vi.fn(),
+  useAdminSubjects: vi.fn(),
 }))
 
 vi.mock('../context/AuthContext', () => ({
-  useAuth: () => ({ session: { access_token: 'token' } }),
+  useAuth: mocks.useAuth,
 }))
 
 vi.mock('../hooks/useAdminSubjects', () => ({
-  useAdminSubjects: () => [],
+  useAdminSubjects: mocks.useAdminSubjects,
 }))
 
 vi.mock('../services/contentApi', () => ({
@@ -78,6 +80,10 @@ beforeEach(() => {
   mocks.uploadAdminContent.mockResolvedValue({})
   mocks.confirm.mockResolvedValue(true)
   mocks.retryError.mockResolvedValue(false)
+  mocks.useAuth.mockReturnValue({ session: { access_token: 'token' } })
+  mocks.useAdminSubjects.mockReturnValue([
+    { id: 'subject-1', code: 'CS233AI', name: 'Data Structures', active: true },
+  ])
 })
 
 describe('AdminContentManager lifecycle states', () => {
@@ -180,5 +186,61 @@ describe('AdminContentManager lifecycle states', () => {
     await user.click(screen.getByRole('button', { name: 'Clear filters' }))
     expect(await screen.findByText('Draft paper')).toBeInTheDocument()
     expect(screen.getByText('Archived paper')).toBeInTheDocument()
+  })
+
+  it('sends one upload request for repeated form submissions while pending', async () => {
+    const user = userEvent.setup()
+    let resolveUpload!: (value: unknown) => void
+    mocks.uploadAdminContent.mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpload = resolve
+      }),
+    )
+    render(<AdminContentManager kind="pyq" />)
+    await screen.findByText('Draft paper')
+    const listCallsBeforeUpload = mocks.listAdminContent.mock.calls.length
+
+    const file = new File(['pdf bytes'], 'paper.pdf', { type: 'application/pdf' })
+    await user.upload(screen.getByLabelText('File'), file)
+    await waitFor(() => expect(screen.getAllByLabelText('Subject')[1]).toHaveValue('subject-1'))
+    const form = screen.getByRole('button', { name: 'Upload' }).closest('form')!
+
+    act(() => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+
+    expect(mocks.uploadAdminContent).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Uploading…' })).toBeDisabled()
+    resolveUpload({})
+    await waitFor(() =>
+      expect(mocks.listAdminContent).toHaveBeenCalledTimes(listCallsBeforeUpload + 1),
+    )
+  })
+
+  it('shows duplicate errors and preserves upload fields after failure', async () => {
+    const user = userEvent.setup()
+    mocks.uploadAdminContent.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: { detail: 'An active question paper with identical PDF content already exists' },
+      },
+    })
+    render(<AdminContentManager kind="pyq" />)
+
+    const file = new File(['pdf bytes'], 'paper.pdf', { type: 'application/pdf' })
+    await user.upload(screen.getByLabelText('File'), file)
+    await user.type(screen.getByLabelText('Title (optional)'), 'Exam paper title')
+    const form = screen.getByRole('button', { name: 'Upload' }).closest('form')!
+    fireEvent.submit(form)
+
+    await waitFor(() =>
+      expect(mocks.error).toHaveBeenCalledWith(
+        'Action not completed',
+        'An active question paper with identical PDF content already exists',
+      ),
+    )
+    expect(screen.getByLabelText('File')).toHaveProperty('files.0.name', 'paper.pdf')
+    expect(screen.getByLabelText('Title (optional)')).toHaveValue('Exam paper title')
   })
 })

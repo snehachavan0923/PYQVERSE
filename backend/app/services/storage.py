@@ -70,6 +70,14 @@ def upload_bytes(path: str, data: bytes, content_type: str) -> None:
         raise StorageError("The file could not be uploaded to private storage") from exc
 
 
+def download_bytes(path: str) -> bytes:
+    bucket = _bucket()
+    try:
+        return bucket.download(path)
+    except Exception as exc:
+        raise StorageError("The stored file could not be verified") from exc
+
+
 def delete_object(path: str) -> None:
     if not path:
         return

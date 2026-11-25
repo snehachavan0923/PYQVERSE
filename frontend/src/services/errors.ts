@@ -1,7 +1,7 @@
 export interface ApiErrorLike {
   response?: {
     status?: number
-    data?: { detail?: unknown }
+    data?: { code?: unknown; detail?: unknown }
   }
   message?: string
   code?: string
@@ -42,9 +42,17 @@ function detailMessage(detail: unknown): string | null {
 export function friendlyError(err: unknown, fallback = 'Unable to complete the request'): string {
   const candidate = err as ApiErrorLike
   const status = candidate?.response?.status
+  const errorCode = candidate?.response?.data?.code
+  if (errorCode === 'DATABASE_SCHEMA_ERROR') {
+    return "The server's data schema is out of date. Please contact an administrator."
+  }
+  if (status === 500) return STATUS_FALLBACKS[500]
   const detail = detailMessage(candidate?.response?.data?.detail)
   if (detail) return detail
   if (status && STATUS_FALLBACKS[status]) return STATUS_FALLBACKS[status]
+  if (candidate?.code === 'ECONNABORTED' || candidate?.code === 'ETIMEDOUT') {
+    return 'The request took too long to complete. Check your connection and try again.'
+  }
   if (candidate?.code === 'ERR_NETWORK' || candidate?.message === 'Network Error') {
     return 'Unable to reach the PYQVERSE server. Check your connection and try again.'
   }

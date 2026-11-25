@@ -306,11 +306,21 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     try:
         response = client.auth.sign_in_with_password({"email": email, "password": payload.password})
     except Exception as exc:
-        _, error_code = log_supabase_auth_error("login", exc)
+        status_code, error_code = log_supabase_auth_error("login", exc)
         if (error_code or "").lower() in {"email_not_confirmed", "email_not_verified"}:
             raise HTTPException(
                 status_code=403,
                 detail="Please confirm your email before signing in.",
+            ) from exc
+        if status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail="Sign-in is temporarily rate limited. Try again shortly.",
+            ) from exc
+        if status_code is None or status_code >= 500:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is temporarily unavailable. Try again shortly.",
             ) from exc
         raise HTTPException(status_code=401, detail="Invalid email or password") from exc
 

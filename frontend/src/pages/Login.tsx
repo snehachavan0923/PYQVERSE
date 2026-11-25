@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import api from '../services/api'
 import { friendlyError } from '../services/errors'
@@ -11,6 +11,7 @@ export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const submitting = useRef(false)
   const { setSession } = useAuth()
   const navigate = useNavigate()
 
@@ -29,14 +30,20 @@ export default function Login() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (loading) return
+    if (submitting.current) return
+    submitting.current = true
     setLoading(true)
     try {
-      const response = await api.post<AuthSession>('/auth/login', { email, password })
+      const response = await api.post<AuthSession>(
+        '/auth/login',
+        { email, password },
+        { timeout: 20_000 },
+      )
       enterSession(response.data)
     } catch (err) {
       void notifications.error('Sign-in failed', friendlyError(err, 'Unable to sign in'))
     } finally {
+      submitting.current = false
       setLoading(false)
     }
   }

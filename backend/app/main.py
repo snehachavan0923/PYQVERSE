@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import ProgrammingError
 
 from app.api.routes import router as api_router
 from app.api.auth_routes import router as auth_router
@@ -41,4 +42,19 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         request.method,
         type(exc).__name__,
     )
-    return JSONResponse(status_code=500, content={"detail": "An unexpected server error occurred"})
+    sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+    if isinstance(exc, ProgrammingError) and sqlstate in {"42703", "42P01"}:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "code": "DATABASE_SCHEMA_ERROR",
+                "detail": "The server's data schema is out of date. Please contact an administrator.",
+            },
+        )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "code": "INTERNAL_SERVER_ERROR",
+            "detail": "An unexpected server error occurred",
+        },
+    )

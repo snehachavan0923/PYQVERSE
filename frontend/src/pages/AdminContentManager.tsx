@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { errorDetail } from '../services/authApi'
 import {
@@ -113,6 +113,7 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   const [items, setItems] = useState<ContentItem[] | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
   const [editing, setEditing] = useState<ContentItem | null>(null)
   const [searchInput, setSearchInput] = useState('')
@@ -161,7 +162,8 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   }, [activeSubjects, uploadForm.subject_id])
 
   const run = async (action: () => Promise<unknown>, successMessage: string) => {
-    if (saving) return false
+    if (savingRef.current) return false
+    savingRef.current = true
     setSaving(true)
     try {
       await action()
@@ -172,6 +174,7 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
       void notifications.error('Action not completed', errorDetail(err, 'The request could not be completed'))
       return false
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }

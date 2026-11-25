@@ -9,6 +9,20 @@ import SubjectCard from '../components/SubjectCard'
 import EmptyState from '../components/EmptyState'
 import { LoadingState, ErrorState } from '../components/PageState'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+}
+
+function isStudentDashboard(value: unknown): value is StudentDashboardData {
+  return (
+    isRecord(value) &&
+    typeof value.welcome_name === 'string' &&
+    isRecord(value.profile) &&
+    isRecord(value.academic_overview) &&
+    Array.isArray(value.subjects)
+  )
+}
+
 export default function StudentDashboard() {
   const { session } = useAuth()
   const [dashboard, setDashboard] = useState<StudentDashboardData | null>(null)
@@ -19,7 +33,13 @@ export default function StudentDashboard() {
     setLoading(true)
     setError('')
     getWithAuth<StudentDashboardData>('/auth/student/dashboard', session)
-      .then(setDashboard)
+      .then((data) => {
+        if (!isStudentDashboard(data)) {
+          setError('The server returned an incomplete dashboard. Please retry.')
+          return
+        }
+        setDashboard(data)
+      })
       .catch((err) => setError(errorDetail(err, 'Unable to load dashboard')))
       .finally(() => setLoading(false))
   }, [session])
@@ -44,7 +64,14 @@ export default function StudentDashboard() {
       </section>
     )
   }
-  if (!dashboard) return null
+  if (!dashboard) {
+    return (
+      <section className="dashboard-page">
+        <PageHeader eyebrow="Student workspace" title="Dashboard" />
+        <ErrorState message="The dashboard response was empty. Please retry." onRetry={load} />
+      </section>
+    )
+  }
 
   const { profile, academic_overview: overview } = dashboard
 
@@ -67,9 +94,9 @@ export default function StudentDashboard() {
 
       <div className="stat-grid">
         <StatCard label="Current semester" value={overview.current_semester ?? 'Not set'} />
-        <StatCard label="Enrolled subjects" value={overview.enrolled_subjects} />
-        <StatCard label="Subjects with syllabus" value={overview.subjects_with_syllabus} />
-        <StatCard label="Subjects with PYQs" value={overview.subjects_with_pyqs} />
+        <StatCard label="Enrolled subjects" value={overview.enrolled_subjects ?? 0} />
+        <StatCard label="Subjects with syllabus" value={overview.subjects_with_syllabus ?? 0} />
+        <StatCard label="Subjects with PYQs" value={overview.subjects_with_pyqs ?? 0} />
         <StatCard label="Question papers" value={overview.pyq_count ?? 0} />
         <StatCard label="Learning resources" value={overview.learning_resource_count ?? 0} />
       </div>
@@ -107,8 +134,8 @@ export default function StudentDashboard() {
         {overview.learning_resources_available ? (
           <div className="dashboard-card">
             <p className="muted">
-              {overview.learning_resource_count} published learning resource
-              {overview.learning_resource_count === 1 ? '' : 's'} are available for your enrolled subjects.
+              {overview.learning_resource_count ?? 0} published learning resource
+              {(overview.learning_resource_count ?? 0) === 1 ? '' : 's'} are available for your enrolled subjects.
             </p>
           </div>
         ) : (

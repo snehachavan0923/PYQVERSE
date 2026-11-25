@@ -25,6 +25,12 @@ class UploadedDocument(Base):
     __tablename__ = "uploaded_documents"
     __table_args__ = (
         Index("ix_uploaded_documents_subject_status", "subject_id", "verification_status"),
+        Index(
+            "uq_uploaded_documents_active_content_sha256",
+            "content_sha256",
+            unique=True,
+            postgresql_where=text("active IS TRUE AND content_sha256 IS NOT NULL"),
+        ),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -33,6 +39,7 @@ class UploadedDocument(Base):
     file_type: Mapped[str] = mapped_column(String(30), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
     academic_scheme_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("academic_schemes.id", ondelete="SET NULL"))

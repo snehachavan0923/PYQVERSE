@@ -6,8 +6,12 @@ export function authHeaders(session: AuthSession | null) {
   return { Authorization: `Bearer ${session?.access_token ?? ''}` }
 }
 
-export async function getWithAuth<T>(path: string, session: AuthSession | null): Promise<T> {
-  const response = await api.get<T>(path, { headers: authHeaders(session) })
+export async function getWithAuth<T>(
+  path: string,
+  session: AuthSession | null,
+  timeout = 20_000,
+): Promise<T> {
+  const response = await api.get<T>(path, { headers: authHeaders(session), timeout })
   return response.data
 }
 

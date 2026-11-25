@@ -78,6 +78,11 @@ class LookupDB:
             return ScalarResult(self.scalar_values.pop(0))
         return ScalarResult([])
 
+    def execute(self, query):
+        if "pg_advisory_xact_lock" in str(query):
+            return None
+        return RowResult([])
+
     def add(self, value):
         self.added.append(value)
 
@@ -88,6 +93,9 @@ class LookupDB:
 
     def commit(self):
         self.committed += 1
+
+    def rollback(self):
+        return None
 
     def refresh(self, value):
         if getattr(value, "id", None) is None:
@@ -728,3 +736,39 @@ def test_admin_uploads_hub_reports_all_content_kinds():
     result = content_routes.admin_uploads(admin=_admin(), db=HubDB(), limit=50)
     assert {item["kind"] for item in result["items"]} == {"SYLLABUS", "PYQ", "RESOURCE"}
     assert result["total"] == 3
+
+
+def test_admin_syllabus_listing_returns_legacy_content():
+    subject = _subject()
+    version = SimpleNamespace(
+        id=uuid.uuid4(),
+        subject_id=subject.id,
+        version="2025-v1",
+        created_at=datetime(2026, 1, 1, 12, 0, 0),
+        verification_status=VerificationStatus.DRAFT,
+        active=True,
+    )
+    document = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Syllabus",
+        description="Legacy syllabus record",
+        original_filename="syllabus.pdf",
+        file_type="pdf",
+        file_size=100,
+        verification_status=VerificationStatus.DRAFT,
+        active=True,
+    )
+
+    class SyllabusListDB:
+        def execute(self, _query):
+            return RowResult([(version, document)])
+
+        def scalars(self, _query):
+            return ScalarResult([subject])
+
+    result = content_routes.admin_list_syllabus(admin=_admin(), db=SyllabusListDB())
+
+    assert result["total"] == 1
+    assert result["items"][0]["subject_code"] == subject.code
+    assert result["items"][0]["verification_status"] == "DRAFT"
+    assert result["items"][0]["title"] == "Syllabus"

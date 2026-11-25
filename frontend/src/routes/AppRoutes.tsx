@@ -23,10 +23,12 @@ import AdminSettings from '../pages/AdminSettings'
 import AdminContentManager from '../pages/AdminContentManager'
 import AdminUploads from '../pages/AdminUploads'
 import { useAuth } from '../context/AuthContext'
+import { ErrorState } from '../components/PageState'
 
 function RootRedirect() {
-  const { session, loading } = useAuth()
+  const { session, loading, restoreError, retryRestore } = useAuth()
   if (loading) return <div className="pyq-loading">Loading...</div>
+  if (restoreError) return <ErrorState message={restoreError} onRetry={retryRestore} />
   if (!session) return <Navigate to="/login" replace />
   if (session.profile.role === 'ADMIN_FACULTY') return <Navigate to="/admin" replace />
   return <Navigate to={session.profile.onboarding_completed ? '/student' : '/onboarding'} replace />
