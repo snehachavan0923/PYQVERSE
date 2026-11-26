@@ -20,6 +20,7 @@ import type {
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
 import ContentActions from '../components/ContentActions'
+import Modal from '../components/Modal'
 import { LoadingState, ErrorState } from '../components/PageState'
 import {
   closePreviewWindow,
@@ -77,6 +78,64 @@ const ACCEPT: Record<ContentKind, string> = {
   resource: '.pdf,.docx',
 }
 
+const UPLOAD_FORM_ID = 'admin-upload-document-form'
+
+const UPLOAD_COPY: Record<ContentKind, { title: string; description: string; manage: string }> = {
+  syllabus: {
+    title: 'Upload Syllabus Document',
+    description: 'Add a syllabus version to an active subject and choose when students can access it.',
+    manage: 'syllabus documents',
+  },
+  pyq: {
+    title: 'Upload Question Paper',
+    description: 'Add a question paper to the academic catalog and control its student visibility.',
+    manage: 'question papers',
+  },
+  resource: {
+    title: 'Upload Learning Resource',
+    description: 'Add notes or reference material for an active subject and control student access.',
+    manage: 'learning resources',
+  },
+}
+
+interface UploadFormState {
+  subject_id: string
+  status: string
+  file: File | null
+  version: string
+  title: string
+  description: string
+  exam_type: string
+  examination_year: string
+  cie_number: string
+  resource_type: string
+}
+
+function emptyUploadForm(): UploadFormState {
+  return {
+    subject_id: '',
+    status: 'DRAFT',
+    file: null,
+    version: '',
+    title: '',
+    description: '',
+    exam_type: 'SEE',
+    examination_year: String(CURRENT_YEAR),
+    cie_number: '',
+    resource_type: 'NOTES',
+  }
+}
+
+function UploadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 16V4" />
+      <path d="m7 9 5-5 5 5" />
+      <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
+    </svg>
+  )
+}
+
 function stateTags(status: string, active: boolean) {
   if (!active) {
     return (
@@ -114,6 +173,9 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const uploadErrorRef = useRef<HTMLParagraphElement>(null)
   const [busy, setBusy] = useState<{ id: string; action: 'view' | 'download' } | null>(null)
   const [editing, setEditing] = useState<ContentItem | null>(null)
   const [searchInput, setSearchInput] = useState('')
@@ -124,18 +186,7 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
 
   const activeSubjects = useMemo(() => subjects.filter((item) => item.active), [subjects])
 
-  const [uploadForm, setUploadForm] = useState({
-    subject_id: '',
-    status: 'DRAFT',
-    file: null as File | null,
-    version: '',
-    title: '',
-    description: '',
-    exam_type: 'SEE',
-    examination_year: String(CURRENT_YEAR),
-    cie_number: '',
-    resource_type: 'NOTES',
-  })
+  const [uploadForm, setUploadForm] = useState<UploadFormState>(emptyUploadForm)
   const [editForm, setEditForm] = useState({
     title: '',
     description: '',
@@ -161,7 +212,36 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
     }
   }, [activeSubjects, uploadForm.subject_id])
 
-  const run = async (action: () => Promise<unknown>, successMessage: string) => {
+  useEffect(() => {
+    if (uploadError) uploadErrorRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [uploadError])
+
+  const updateUploadForm = (patch: Partial<UploadFormState>) => {
+    setUploadForm((current) => ({ ...current, ...patch }))
+    setUploadError('')
+  }
+
+  const resetUploadForm = () => {
+    setUploadForm(emptyUploadForm())
+    setUploadError('')
+  }
+
+  const openUpload = () => {
+    setUploadError('')
+    setUploadOpen(true)
+  }
+
+  const closeUpload = () => {
+    if (savingRef.current) return
+    setUploadOpen(false)
+    resetUploadForm()
+  }
+
+  const run = async (
+    action: () => Promise<unknown>,
+    successMessage: string,
+    options?: { inlineError?: boolean },
+  ) => {
     if (savingRef.current) return false
     savingRef.current = true
     setSaving(true)
@@ -171,7 +251,9 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
       load()
       return true
     } catch (err) {
-      void notifications.error('Action not completed', errorDetail(err, 'The request could not be completed'))
+      const detail = errorDetail(err, 'The request could not be completed')
+      if (options?.inlineError) setUploadError(detail)
+      else void notifications.error('Action not completed', detail)
       return false
     } finally {
       savingRef.current = false
@@ -181,24 +263,42 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
 
   const submitUpload = async (event: FormEvent) => {
     event.preventDefault()
-    if (saving) return
+    if (savingRef.current) return
     const file = uploadForm.file
     if (!file) {
-      void notifications.error('File required', 'Select a file to upload.')
+      setUploadError('Select a file to upload.')
       return
     }
     if (file.size > MAX_FILE_BYTES) {
-      void notifications.error('File too large', 'The maximum file size is 20 MB.')
+      setUploadError('The maximum file size is 20 MB.')
       return
     }
     const subject = activeSubjects.find((item) => item.id === uploadForm.subject_id)
     if (!subject) {
-      void notifications.error('Subject required', 'Select a valid active subject.')
+      setUploadError('Select a valid active subject.')
+      return
+    }
+    if (kind === 'syllabus' && !uploadForm.version.trim()) {
+      setUploadError('Add a syllabus version.')
       return
     }
     if (kind === 'resource' && !uploadForm.title.trim()) {
-      void notifications.error('Title required', 'Add a title for the learning resource.')
+      setUploadError('Add a title for the learning resource.')
       return
+    }
+    if (kind === 'pyq') {
+      const year = Number(uploadForm.examination_year)
+      if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+        setUploadError('Enter an examination year between 2000 and 2100.')
+        return
+      }
+      if (uploadForm.exam_type === 'CIE' && uploadForm.cie_number) {
+        const cieNumber = Number(uploadForm.cie_number)
+        if (!Number.isInteger(cieNumber) || cieNumber < 1 || cieNumber > 3) {
+          setUploadError('CIE number must be between 1 and 3.')
+          return
+        }
+      }
     }
 
     const ok = await run(
@@ -220,17 +320,11 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
           resource_type: kind === 'resource' ? uploadForm.resource_type : undefined,
         }),
       'Content uploaded',
+      { inlineError: true },
     )
     if (ok) {
-      setUploadForm((current) => ({
-        ...current,
-        file: null,
-        version: '',
-        title: '',
-        description: '',
-        examination_year: String(CURRENT_YEAR),
-        cie_number: '',
-      }))
+      setUploadOpen(false)
+      resetUploadForm()
     }
   }
 
@@ -368,7 +462,18 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
 
   return (
     <section className="dashboard-page">
-      <PageHeader eyebrow={copy.eyebrow} title={copy.title} description={copy.description} />
+      <PageHeader
+        className="content-manager-header"
+        eyebrow={copy.eyebrow}
+        title={copy.title}
+        description={copy.description}
+        actions={
+          <button className="primary-button compact-button" type="button" onClick={openUpload}>
+            <UploadIcon />
+            Upload Document
+          </button>
+        }
+      />
 
       <form
         className="filter-bar"
@@ -420,133 +525,8 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
         </button>
       </form>
 
-      <div className="two-column-grid">
-        <form className="editor-panel" onSubmit={submitUpload}>
-          <h2>Upload {kind === 'pyq' ? 'question paper' : kind === 'syllabus' ? 'syllabus' : 'resource'}</h2>
-          <label>
-            Subject
-            <select
-              value={uploadForm.subject_id}
-              onChange={(event) => setUploadForm({ ...uploadForm, subject_id: event.target.value })}
-              required
-            >
-              <option value="">Select subject</option>
-              {activeSubjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>
-                  {subject.code} — {subject.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {kind === 'syllabus' && (
-            <label>
-              Version
-              <input
-                value={uploadForm.version}
-                onChange={(event) => setUploadForm({ ...uploadForm, version: event.target.value })}
-                placeholder="e.g. 2025-v1"
-                required
-                maxLength={50}
-              />
-            </label>
-          )}
-          {kind === 'pyq' && (
-            <div className="editor-grid">
-              <label>
-                Exam type
-                <select
-                  value={uploadForm.exam_type}
-                  onChange={(event) => setUploadForm({ ...uploadForm, exam_type: event.target.value })}
-                >
-                  <option value="CIE">CIE</option>
-                  <option value="SEE">SEE</option>
-                </select>
-              </label>
-              <label>
-                Examination year
-                <input
-                  type="number"
-                  min={2000}
-                  max={2100}
-                  value={uploadForm.examination_year}
-                  onChange={(event) => setUploadForm({ ...uploadForm, examination_year: event.target.value })}
-                  required
-                />
-              </label>
-              {uploadForm.exam_type === 'CIE' && (
-                <label>
-                  CIE number (optional)
-                  <input
-                    type="number"
-                    min={1}
-                    max={3}
-                    value={uploadForm.cie_number}
-                    onChange={(event) => setUploadForm({ ...uploadForm, cie_number: event.target.value })}
-                  />
-                </label>
-              )}
-            </div>
-          )}
-          {kind === 'resource' && (
-            <label>
-              Resource type
-              <select
-                value={uploadForm.resource_type}
-                onChange={(event) => setUploadForm({ ...uploadForm, resource_type: event.target.value })}
-              >
-                {RESOURCE_TYPES.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label>
-            Title (optional)
-            <input
-              value={uploadForm.title}
-              onChange={(event) => setUploadForm({ ...uploadForm, title: event.target.value })}
-              maxLength={300}
-            />
-          </label>
-          <label>
-            Description (optional)
-            <textarea
-              rows={3}
-              value={uploadForm.description}
-              onChange={(event) => setUploadForm({ ...uploadForm, description: event.target.value })}
-              maxLength={4000}
-            />
-          </label>
-          <label>
-            File
-            <input
-              type="file"
-              accept={ACCEPT[kind]}
-              onChange={(event) => setUploadForm({ ...uploadForm, file: event.target.files?.[0] ?? null })}
-              required
-            />
-          </label>
-          <label>
-            Publication status
-            <select
-              value={uploadForm.status}
-              onChange={(event) => setUploadForm({ ...uploadForm, status: event.target.value })}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <p className="form-hint">Accepted files: PDF{kind === 'pyq' ? '' : ' or DOCX'}. Maximum size: 20 MB.</p>
-          <div className="form-actions">
-            <button className="primary-button compact-button" disabled={saving || !activeSubjects.length}>
-              {saving ? 'Uploading…' : 'Upload'}
-            </button>
-          </div>
-        </form>
-
-        {editing ? (
-          <form className="editor-panel" onSubmit={submitEdit}>
+      {editing ? (
+        <form className="editor-panel content-edit-panel" onSubmit={submitEdit}>
             <div className="section-heading">
               <h2>Edit metadata</h2>
               <button className="secondary-button compact-button" type="button" onClick={() => setEditing(null)}>
@@ -601,17 +581,161 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
               </button>
             </div>
           </form>
-        ) : (
-          <article className="editor-panel">
-            <h2>Manage {kind === 'pyq' ? 'question papers' : kind === 'syllabus' ? 'syllabus documents' : 'resources'}</h2>
-            <p className="muted">
-              Use the filters above to find content. Archived items remain stored and can be restored;
-              only published active items are visible to students.
-            </p>
-            <p className="metric-note">Showing {filtered.length} of {items?.length ?? 0} items</p>
-          </article>
-        )}
+      ) : null}
+
+      <div className="content-summary">
+        <div>
+          <h2>Manage {UPLOAD_COPY[kind].manage}</h2>
+          <p className="muted">
+            Use the filters above to find content. Archived items remain stored and can be restored;
+            only published active items are visible to students.
+          </p>
+        </div>
+        <span className="metric-note">Showing {filtered.length} of {items?.length ?? 0} items</span>
       </div>
+
+      <Modal
+        open={uploadOpen}
+        title={UPLOAD_COPY[kind].title}
+        description={UPLOAD_COPY[kind].description}
+        busy={saving}
+        onClose={closeUpload}
+        footer={
+          <>
+            <button className="secondary-button compact-button" type="button" disabled={saving} onClick={closeUpload}>
+              Cancel
+            </button>
+            <button
+              className="primary-button compact-button"
+              type="submit"
+              form={UPLOAD_FORM_ID}
+              disabled={saving || !activeSubjects.length}
+            >
+              {saving ? 'Uploading…' : 'Upload'}
+            </button>
+          </>
+        }
+      >
+        <form id={UPLOAD_FORM_ID} className="upload-modal-form" onSubmit={submitUpload} noValidate>
+          {uploadError && <p className="form-error" role="alert" ref={uploadErrorRef}>{uploadError}</p>}
+          <label>
+            Subject
+            <select
+              data-autofocus
+              value={uploadForm.subject_id}
+              onChange={(event) => updateUploadForm({ subject_id: event.target.value })}
+              required
+            >
+              <option value="">Select subject</option>
+              {activeSubjects.map((subject) => (
+                <option key={subject.id} value={subject.id}>
+                  {subject.code} — {subject.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {kind === 'syllabus' && (
+            <label>
+              Version
+              <input
+                value={uploadForm.version}
+                onChange={(event) => updateUploadForm({ version: event.target.value })}
+                placeholder="e.g. 2025-v1"
+                required
+                maxLength={50}
+              />
+            </label>
+          )}
+          {kind === 'pyq' && (
+            <div className="editor-grid">
+              <label>
+                Exam type
+                <select
+                  value={uploadForm.exam_type}
+                  onChange={(event) => updateUploadForm({ exam_type: event.target.value })}
+                >
+                  <option value="CIE">CIE</option>
+                  <option value="SEE">SEE</option>
+                </select>
+              </label>
+              <label>
+                Examination year
+                <input
+                  type="number"
+                  min={2000}
+                  max={2100}
+                  value={uploadForm.examination_year}
+                  onChange={(event) => updateUploadForm({ examination_year: event.target.value })}
+                  required
+                />
+              </label>
+              {uploadForm.exam_type === 'CIE' && (
+                <label>
+                  CIE number (optional)
+                  <input
+                    type="number"
+                    min={1}
+                    max={3}
+                    value={uploadForm.cie_number}
+                    onChange={(event) => updateUploadForm({ cie_number: event.target.value })}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+          {kind === 'resource' && (
+            <label>
+              Resource type
+              <select
+                value={uploadForm.resource_type}
+                onChange={(event) => updateUploadForm({ resource_type: event.target.value })}
+              >
+                {RESOURCE_TYPES.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            Title (optional)
+            <input
+              value={uploadForm.title}
+              onChange={(event) => updateUploadForm({ title: event.target.value })}
+              maxLength={300}
+            />
+          </label>
+          <label>
+            Description (optional)
+            <textarea
+              rows={3}
+              value={uploadForm.description}
+              onChange={(event) => updateUploadForm({ description: event.target.value })}
+              maxLength={4000}
+            />
+          </label>
+          <label>
+            File
+            <input
+              type="file"
+              accept={ACCEPT[kind]}
+              onChange={(event) => updateUploadForm({ file: event.target.files?.[0] ?? null })}
+              required
+            />
+          </label>
+          <label>
+            Publication status
+            <select
+              value={uploadForm.status}
+              onChange={(event) => updateUploadForm({ status: event.target.value })}
+            >
+              {STATUS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <p className="form-hint">Accepted files: PDF{kind === 'pyq' ? '' : ' or DOCX'}. Maximum size: 20 MB.</p>
+        </form>
+      </Modal>
 
       {error && <ErrorState message={error} onRetry={load} />}
       {!items && !error && <LoadingState label="Loading content" rows={3} />}
@@ -680,7 +804,15 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
           description={
             items.length
               ? 'No uploaded items match the current search and filters.'
-              : 'Use the upload form to add the first document.'
+              : `Upload your first ${kind === 'pyq' ? 'question paper' : kind === 'syllabus' ? 'syllabus document' : 'learning resource'} to start managing content.`
+          }
+          action={
+            items.length ? undefined : (
+              <button className="primary-button compact-button" type="button" onClick={openUpload}>
+                <UploadIcon />
+                Upload Document
+              </button>
+            )
           }
         />
       ))}

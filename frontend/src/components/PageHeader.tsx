@@ -6,11 +6,12 @@ interface PageHeaderProps {
   description?: string
   meta?: ReactNode
   actions?: ReactNode
+  className?: string
 }
 
-export default function PageHeader({ eyebrow, title, description, meta, actions }: PageHeaderProps) {
+export default function PageHeader({ eyebrow, title, description, meta, actions, className = '' }: PageHeaderProps) {
   return (
-    <header className="page-header">
+    <header className={`page-header ${className}`.trim()}>
       <div>
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1>{title}</h1>

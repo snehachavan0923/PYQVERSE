@@ -86,6 +86,11 @@ beforeEach(() => {
   ])
 })
 
+async function openUploadDialog(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: 'Upload Document' }))
+  return await screen.findByRole('dialog')
+}
+
 describe('AdminContentManager lifecycle states', () => {
   it('shows DRAFT for an active draft and a Publish action', async () => {
     render(<AdminContentManager kind="pyq" />)
@@ -200,10 +205,11 @@ describe('AdminContentManager lifecycle states', () => {
     await screen.findByText('Draft paper')
     const listCallsBeforeUpload = mocks.listAdminContent.mock.calls.length
 
+    const dialog = await openUploadDialog(user)
     const file = new File(['pdf bytes'], 'paper.pdf', { type: 'application/pdf' })
-    await user.upload(screen.getByLabelText('File'), file)
-    await waitFor(() => expect(screen.getAllByLabelText('Subject')[1]).toHaveValue('subject-1'))
-    const form = screen.getByRole('button', { name: 'Upload' }).closest('form')!
+    await user.upload(within(dialog).getByLabelText('File'), file)
+    await waitFor(() => expect(within(dialog).getByLabelText('Subject')).toHaveValue('subject-1'))
+    const form = dialog.querySelector('form')!
 
     act(() => {
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
@@ -211,14 +217,15 @@ describe('AdminContentManager lifecycle states', () => {
     })
 
     expect(mocks.uploadAdminContent).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole('button', { name: 'Uploading…' })).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: 'Uploading…' })).toBeDisabled()
     resolveUpload({})
     await waitFor(() =>
       expect(mocks.listAdminContent).toHaveBeenCalledTimes(listCallsBeforeUpload + 1),
     )
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('shows duplicate errors and preserves upload fields after failure', async () => {
+  it('shows duplicate errors inside the modal and preserves upload fields after failure', async () => {
     const user = userEvent.setup()
     mocks.uploadAdminContent.mockRejectedValueOnce({
       response: {
@@ -228,19 +235,90 @@ describe('AdminContentManager lifecycle states', () => {
     })
     render(<AdminContentManager kind="pyq" />)
 
+    const dialog = await openUploadDialog(user)
     const file = new File(['pdf bytes'], 'paper.pdf', { type: 'application/pdf' })
-    await user.upload(screen.getByLabelText('File'), file)
-    await user.type(screen.getByLabelText('Title (optional)'), 'Exam paper title')
-    const form = screen.getByRole('button', { name: 'Upload' }).closest('form')!
-    fireEvent.submit(form)
+    await user.upload(within(dialog).getByLabelText('File'), file)
+    await user.type(within(dialog).getByLabelText('Title (optional)'), 'Exam paper title')
+    fireEvent.submit(dialog.querySelector('form')!)
 
     await waitFor(() =>
-      expect(mocks.error).toHaveBeenCalledWith(
-        'Action not completed',
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
         'An active question paper with identical PDF content already exists',
       ),
     )
-    expect(screen.getByLabelText('File')).toHaveProperty('files.0.name', 'paper.pdf')
-    expect(screen.getByLabelText('Title (optional)')).toHaveValue('Exam paper title')
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('File')).toHaveProperty('files.0.name', 'paper.pdf')
+    expect(within(dialog).getByLabelText('Title (optional)')).toHaveValue('Exam paper title')
+  })
+
+  it('offers an upload action in the empty state when there are no documents', async () => {
+    mocks.listAdminContent.mockResolvedValue({ items: [], total: 0 })
+    render(<AdminContentManager kind="syllabus" />)
+
+    expect(await screen.findByText('No content found')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Upload Document' })).toHaveLength(2)
+  })
+
+  it('opens the syllabus modal with syllabus-specific fields', async () => {
+    const user = userEvent.setup()
+    render(<AdminContentManager kind="syllabus" />)
+
+    const dialog = await openUploadDialog(user)
+    expect(within(dialog).getByRole('heading', { name: 'Upload Syllabus Document' })).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('Version')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Exam type')).not.toBeInTheDocument()
+  })
+
+  it('shows inline validation errors from the footer action without calling the upload API', async () => {
+    const user = userEvent.setup()
+    render(<AdminContentManager kind="pyq" />)
+
+    const dialog = await openUploadDialog(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Upload' }))
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Select a file to upload.')
+    expect(mocks.uploadAdminContent).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('closes on Escape when idle but not while an upload is pending', async () => {
+    const user = userEvent.setup()
+    let resolveUpload!: (value: unknown) => void
+    mocks.uploadAdminContent.mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpload = resolve
+      }),
+    )
+    render(<AdminContentManager kind="pyq" />)
+    await screen.findByText('Draft paper')
+
+    let dialog = await openUploadDialog(user)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    dialog = await openUploadDialog(user)
+    await user.upload(within(dialog).getByLabelText('File'), new File(['pdf'], 'paper.pdf', { type: 'application/pdf' }))
+    fireEvent.submit(dialog.querySelector('form')!)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Close dialog' })).toBeDisabled()
+
+    resolveUpload({})
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('closes on backdrop click and resets the form for the next upload', async () => {
+    const user = userEvent.setup()
+    render(<AdminContentManager kind="pyq" />)
+    await screen.findByText('Draft paper')
+
+    let dialog = await openUploadDialog(user)
+    await user.type(within(dialog).getByLabelText('Title (optional)'), 'Discarded title')
+    fireEvent.mouseDown(document.querySelector('.document-modal-backdrop')!)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    dialog = await openUploadDialog(user)
+    expect(within(dialog).getByLabelText('Title (optional)')).toHaveValue('')
+    expect(within(dialog).getByLabelText('File')).toHaveValue('')
   })
 })
