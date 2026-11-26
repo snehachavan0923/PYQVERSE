@@ -661,7 +661,7 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
                       onDownload={() => void download(item)}
                     />
                     <button
-                      className={active ? 'secondary-button compact-button danger-button' : 'secondary-button compact-button'}
+                      className={active ? 'danger-button compact-button' : 'secondary-button compact-button'}
                       type="button"
                       disabled={saving}
                       onClick={() => void toggleActive(item)}

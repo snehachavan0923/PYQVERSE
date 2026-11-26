@@ -23,6 +23,13 @@ function isStudentDashboard(value: unknown): value is StudentDashboardData {
   )
 }
 
+const QUICK_LINKS = [
+  { label: 'My subjects', hint: 'Enrolled semester subjects', to: '/student/subjects' },
+  { label: 'Syllabus', hint: 'Published syllabus documents', to: '/student/syllabus' },
+  { label: 'Question papers', hint: 'Previous year questions', to: '/student/pyqs' },
+  { label: 'Learning resources', hint: 'Notes and study material', to: '/student/resources' },
+]
+
 export default function StudentDashboard() {
   const { session } = useAuth()
   const [dashboard, setDashboard] = useState<StudentDashboardData | null>(null)
@@ -74,6 +81,8 @@ export default function StudentDashboard() {
   }
 
   const { profile, academic_overview: overview } = dashboard
+  const progress = dashboard.progress
+  const progressAvailable = Boolean(dashboard.academic_preparation?.progress_available && progress)
 
   return (
     <section className="dashboard-page">
@@ -101,11 +110,27 @@ export default function StudentDashboard() {
         <StatCard label="Learning resources" value={overview.learning_resource_count ?? 0} />
       </div>
 
+      {progressAvailable && progress && (
+        <section className="section-block">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Study progress</p>
+              <h2>Your recorded topic activity</h2>
+            </div>
+          </div>
+          <div className="stat-grid">
+            <StatCard label="Topics started" value={progress.started_topics} />
+            <StatCard label="Topics completed" value={progress.completed_topics} />
+            <StatCard label="Topics bookmarked" value={progress.bookmarked_topics} />
+          </div>
+        </section>
+      )}
+
       <section className="section-block">
         <div className="section-heading">
           <div>
             <p className="eyebrow">Academic overview</p>
-            <h2>Subject cards</h2>
+            <h2>Your subjects</h2>
           </div>
           <Link to="/student/subjects" className="text-button">View all subjects</Link>
         </div>
@@ -123,27 +148,52 @@ export default function StudentDashboard() {
         )}
       </section>
 
+      <div className="two-column-grid">
+        <article className="dashboard-card">
+          <p className="eyebrow">Question papers</p>
+          <h2>{overview.pyq_count ?? 0} published paper{(overview.pyq_count ?? 0) === 1 ? '' : 's'}</h2>
+          <p className="muted">
+            {overview.subjects_with_pyqs ?? 0} of your enrolled subjects have published question papers.
+          </p>
+          <div className="form-actions" style={{ marginTop: 16 }}>
+            <Link className="secondary-button auth-button-link compact-button" to="/student/pyqs">
+              Open question papers
+            </Link>
+          </div>
+        </article>
+
+        <article className="dashboard-card">
+          <p className="eyebrow">Learning resources</p>
+          <h2>{overview.learning_resource_count ?? 0} resource{(overview.learning_resource_count ?? 0) === 1 ? '' : 's'}</h2>
+          <p className="muted">
+            {overview.learning_resources_available
+              ? 'Published notes, study material and reference documents are available for your subjects.'
+              : 'Learning resources will appear here once faculty publish and verify them.'}
+          </p>
+          <div className="form-actions" style={{ marginTop: 16 }}>
+            <Link className="secondary-button auth-button-link compact-button" to="/student/resources">
+              Open resources
+            </Link>
+          </div>
+        </article>
+      </div>
+
       <section className="section-block">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Learning resources</p>
-            <h2>Resource availability</h2>
+            <p className="eyebrow">Quick navigation</p>
+            <h2>Jump to your academic sections</h2>
           </div>
-          <Link to="/student/resources" className="text-button">Open resources</Link>
         </div>
-        {overview.learning_resources_available ? (
-          <div className="dashboard-card">
-            <p className="muted">
-              {overview.learning_resource_count ?? 0} published learning resource
-              {(overview.learning_resource_count ?? 0) === 1 ? '' : 's'} are available for your enrolled subjects.
-            </p>
-          </div>
-        ) : (
-          <EmptyState
-            title="No resources uploaded yet"
-            description="Learning resources will appear here once they are uploaded and verified by faculty."
-          />
-        )}
+        <div className="quick-grid">
+          {QUICK_LINKS.map((link) => (
+            <Link className="quick-link" key={link.to} to={link.to}>
+              <strong>{link.label}</strong>
+              <span>{link.hint}</span>
+              <span className="quick-link-arrow" aria-hidden="true">→</span>
+            </Link>
+          ))}
+        </div>
       </section>
     </section>
   )

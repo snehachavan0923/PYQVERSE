@@ -11,6 +11,7 @@ export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
   const submitting = useRef(false)
   const { setSession } = useAuth()
   const navigate = useNavigate()
@@ -32,6 +33,7 @@ export default function Login() {
     event.preventDefault()
     if (submitting.current) return
     submitting.current = true
+    setError('')
     setLoading(true)
     try {
       const response = await api.post<AuthSession>(
@@ -41,7 +43,9 @@ export default function Login() {
       )
       enterSession(response.data)
     } catch (err) {
-      void notifications.error('Sign-in failed', friendlyError(err, 'Unable to sign in'))
+      const message = friendlyError(err, 'Unable to sign in')
+      setError(message)
+      void notifications.error('Sign-in failed', message)
     } finally {
       submitting.current = false
       setLoading(false)
@@ -72,6 +76,7 @@ export default function Login() {
           onChange={setPassword}
           required
         />
+        {error && <p className="form-error" role="alert">{error}</p>}
         <button className="primary-button" disabled={loading}>
           {loading ? 'Signing in…' : 'Sign in'}
         </button>

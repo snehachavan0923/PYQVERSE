@@ -27,15 +27,15 @@ beforeEach(() => {
 })
 
 describe('ThemeToggle', () => {
-  it('applies the light theme by default and toggles to dark', async () => {
+  it('applies the dark theme by default and toggles to light', async () => {
     const user = userEvent.setup()
     render(<ThemeToggle />)
 
-    expect(document.documentElement.dataset.theme).toBe('light')
-    await user.click(screen.getByRole('button', { name: 'Switch to dark theme' }))
-
     expect(document.documentElement.dataset.theme).toBe('dark')
-    expect(localStorage.getItem('pyqverse_theme')).toBe('dark')
+    await user.click(screen.getByRole('button', { name: 'Switch to light theme' }))
+
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(localStorage.getItem('pyqverse_theme')).toBe('light')
   })
 
   it('restores a stored dark preference', () => {
@@ -44,6 +44,14 @@ describe('ThemeToggle', () => {
 
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeInTheDocument()
+  })
+
+  it('restores a stored light preference', () => {
+    localStorage.setItem('pyqverse_theme', 'light')
+    render(<ThemeToggle />)
+
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(screen.getByRole('button', { name: 'Switch to dark theme' })).toBeInTheDocument()
   })
 })
 

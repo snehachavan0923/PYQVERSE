@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { errorDetail, getWithAuth, patchWithAuth } from '../services/authApi'
 import notifications from '../services/notification'
@@ -37,14 +37,19 @@ export default function AdminProfile() {
   const [fullName, setFullName] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
+  const load = useCallback(() => {
     getWithAuth<AdminProfileData>('/auth/admin/profile', session)
       .then((data) => {
+        setError('')
         setProfile(data)
         setFullName(data.full_name)
       })
       .catch((err) => setError(errorDetail(err, 'Unable to load admin profile')))
   }, [session])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -72,7 +77,7 @@ export default function AdminProfile() {
   return (
     <section className="dashboard-page">
       <PageHeader eyebrow="Profile" title="Administrator profile" description="Your ADMIN_FACULTY identity and account status." />
-      {error && <ErrorState message={error} />}
+      {error && <ErrorState message={error} onRetry={load} />}
       {!profile && !error && <LoadingState label="Loading profile" rows={3} />}
       {profile && (
         <div className="two-column-grid">

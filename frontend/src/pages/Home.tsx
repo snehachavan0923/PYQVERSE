@@ -1,13 +1,16 @@
 export default function Home() {
   return (
     <section className="flex flex-col items-center gap-4 text-center">
-      <h1 className="text-5xl font-bold tracking-tight text-white sm:text-6xl">
+      <span className="eyebrow">Academic workspace</span>
+      <h1 className="text-4xl font-semibold tracking-tight text-[var(--text)] sm:text-5xl">
         PYQVERSE
       </h1>
-      <p className="text-xl font-medium text-emerald-400">
-        Development Environment Ready
+      <p className="text-base font-medium text-[var(--primary)]">
+        Your previous year questions, organised.
       </p>
-      <p className="text-slate-400">Frontend is running successfully.</p>
+      <p className="max-w-md text-sm text-[var(--text-secondary)]">
+        A focused workspace for syllabus, question papers and learning resources.
+      </p>
     </section>
   )
 }

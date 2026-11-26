@@ -5,6 +5,7 @@ interface ContentActionsProps {
   viewDisabled?: boolean
   label?: string
   viewHint?: string
+  withLabels?: boolean
 }
 
 function EyeIcon() {
@@ -33,12 +34,14 @@ export default function ContentActions({
   viewDisabled = false,
   label,
   viewHint,
+  withLabels = false,
 }: ContentActionsProps) {
   const suffix = label ? ` ${label}` : ''
+  const buttonClass = withLabels ? 'icon-button action-button' : 'icon-button'
   return (
     <div className="content-actions">
       <button
-        className="icon-button"
+        className={buttonClass}
         type="button"
         aria-label={`View PDF${suffix}`}
         title={viewHint ?? 'View PDF in a new tab'}
@@ -46,9 +49,10 @@ export default function ContentActions({
         onClick={onView}
       >
         <EyeIcon />
+        {withLabels && <span className="action-label">Preview</span>}
       </button>
       <button
-        className="icon-button"
+        className={buttonClass}
         type="button"
         aria-label={`Download${suffix}`}
         title="Download file"
@@ -56,6 +60,7 @@ export default function ContentActions({
         onClick={onDownload}
       >
         <DownloadIcon />
+        {withLabels && <span className="action-label">Download</span>}
       </button>
     </div>
   )

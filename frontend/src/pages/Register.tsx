@@ -67,7 +67,9 @@ export default function Register() {
       void notifications.toast('success', 'Confirmation email sent')
       setSubmittedEmail(form.email.trim())
     } catch (err) {
-      void notifications.error('Registration failed', friendlyError(err, 'Unable to register'))
+      const message = friendlyError(err, 'Unable to register')
+      setError(message)
+      void notifications.error('Registration failed', message)
     } finally {
       setLoading(false)
     }

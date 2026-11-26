@@ -5,13 +5,18 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="PYQVERSE — RVCE academic preparation workspace." />
+    <meta name="theme-color" content="#090B12" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
     <title>PYQVERSE</title>
     <script>
       try {
         var stored = localStorage.getItem('pyqverse_theme')
-        var theme = stored === 'light' || stored === 'dark'
-          ? stored
-          : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        var theme = stored === 'light' || stored === 'dark' ? stored : 'dark'
         document.documentElement.dataset.theme = theme
       } catch (e) {}
     </script>

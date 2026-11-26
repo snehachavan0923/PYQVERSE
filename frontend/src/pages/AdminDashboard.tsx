@@ -8,6 +8,13 @@ import StatCard from '../components/StatCard'
 import EmptyState from '../components/EmptyState'
 import { LoadingState, ErrorState } from '../components/PageState'
 
+const SHORTCUTS = [
+  { label: 'Academic management', hint: 'Branches, schemes, subjects', to: '/admin/academic' },
+  { label: 'User management', hint: 'Students and administrators', to: '/admin/users' },
+  { label: 'PYQ management', hint: 'Upload and publish papers', to: '/admin/pyqs' },
+  { label: 'Uploads', hint: 'All stored documents', to: '/admin/uploads' },
+]
+
 function formatWhen(value: string | null) {
   if (!value) return 'just now'
   const parsed = new Date(value)
@@ -109,6 +116,24 @@ export default function AdminDashboard() {
         <StatCard label="Learning resources" value={documents.learning_resources ?? 0} hint="Active resources" />
         <StatCard label="Pending review items" value={documents.pending_reviews ?? 0} hint="Recorded reviews" />
       </div>
+
+      <section className="section-block">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Management</p>
+            <h2>Shortcuts</h2>
+          </div>
+        </div>
+        <div className="quick-grid">
+          {SHORTCUTS.map((item) => (
+            <Link className="quick-link" key={item.to} to={item.to}>
+              <strong>{item.label}</strong>
+              <span>{item.hint}</span>
+              <span className="quick-link-arrow" aria-hidden="true">→</span>
+            </Link>
+          ))}
+        </div>
+      </section>
 
       <div className="two-column-grid">
         <article className="dashboard-card">

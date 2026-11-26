@@ -107,7 +107,7 @@ export default function StudentResources() {
     <section className="dashboard-page">
       <PageHeader
         eyebrow="Learning resources"
-        title="Learning resources"
+        title="Learning Resources"
         description="Published notes, study material and reference documents for your subjects."
       />
       <form className="filter-bar" onSubmit={submitSearch}>
@@ -151,6 +151,7 @@ export default function StudentResources() {
               </div>
               <div className="content-item-side">
                 <ContentActions
+                  withLabels
                   label={resource.title}
                   busy={busy?.id === resource.id}
                   viewDisabled={!isPdfFile(resource.file_type)}

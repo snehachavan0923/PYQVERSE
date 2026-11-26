@@ -132,9 +132,11 @@ export default function StudentSubjectDetail() {
         {TABS.map((item) => (
           <button
             key={item.key}
+            id={`tab-${item.key}`}
             type="button"
             role="tab"
             aria-selected={tab === item.key}
+            aria-controls={`panel-${item.key}`}
             className={`tab-button${tab === item.key ? ' active' : ''}`}
             onClick={() => setTab(item.key)}
           >
@@ -144,103 +146,120 @@ export default function StudentSubjectDetail() {
       </div>
 
       {tab === 'overview' && (
-        <article className="detail-card">
-          <h2>Subject overview</h2>
-          <p className="muted">{subject.description || 'No description has been added for this subject yet.'}</p>
-          <div className="detail-row"><span>Subject code</span><strong>{subject.code}</strong></div>
-          <div className="detail-row"><span>Subject type</span><strong>{subject.subject_type}</strong></div>
-          <div className="detail-row"><span>Credits</span><strong>{subject.credits ?? 'Not set'}</strong></div>
-          <div className="detail-row"><span>Semester</span><strong>{subject.semester ?? 'Not set'}</strong></div>
-          <div className="detail-row"><span>Academic scheme</span><strong>{subject.academic_scheme ?? 'Not set'}</strong></div>
-        </article>
+        <div role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" tabIndex={0}>
+          <article className="detail-card">
+            <h2>Subject overview</h2>
+            <p className="muted">{subject.description || 'No description has been added for this subject yet.'}</p>
+            <div className="detail-row"><span>Subject code</span><strong>{subject.code}</strong></div>
+            <div className="detail-row"><span>Subject type</span><strong>{subject.subject_type}</strong></div>
+            <div className="detail-row"><span>Credits</span><strong>{subject.credits ?? 'Not set'}</strong></div>
+            <div className="detail-row"><span>Semester</span><strong>{subject.semester ?? 'Not set'}</strong></div>
+            <div className="detail-row"><span>Academic scheme</span><strong>{subject.academic_scheme ?? 'Not set'}</strong></div>
+          </article>
+        </div>
       )}
 
       {tab === 'syllabus' && (
-        detail.syllabus.length ? (
-          <div className="content-list">
-            {detail.syllabus.map((document) => (
-              <article className="content-item" key={document.id}>
-                <div className="content-item-main">
-                  <strong>{document.original_filename}</strong>
-                  <div className="content-meta">
-                    <span>Version {document.version}</span>
-                    <span>{document.file_type.toUpperCase()}</span>
-                    {statusTag(document.verification_status)}
+        <div role="tabpanel" id="panel-syllabus" aria-labelledby="tab-syllabus" tabIndex={0}>
+          {detail.syllabus.length ? (
+            <div className="content-list">
+              {detail.syllabus.map((document) => (
+                <article className="content-item" key={document.id}>
+                  <div className="content-item-main">
+                    <strong>{document.original_filename}</strong>
+                    <div className="content-meta">
+                      <span>Version {document.version}</span>
+                      <span>{document.file_type.toUpperCase()}</span>
+                      {statusTag(document.verification_status)}
+                    </div>
                   </div>
-                </div>
-                <div className="content-item-side">
-                  <ContentActions
-                    label={document.original_filename}
-                    busy={busy?.id === document.id}
-                    viewDisabled={!isPdfFile(document.file_type)}
-                    viewHint={isPdfFile(document.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
-                    onView={() => void view('syllabus', document.id)}
-                    onDownload={() => void download('syllabus', document.id)}
-                  />
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : <EmptyState title="No syllabus available" description="No published syllabus document exists for this subject yet." />
+                  <div className="content-item-side">
+                    <ContentActions
+                      withLabels
+                      label={document.original_filename}
+                      busy={busy?.id === document.id}
+                      viewDisabled={!isPdfFile(document.file_type)}
+                      viewHint={isPdfFile(document.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                      onView={() => void view('syllabus', document.id)}
+                      onDownload={() => void download('syllabus', document.id)}
+                    />
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="No syllabus available" description="No published syllabus document exists for this subject yet." />
+          )}
+        </div>
       )}
 
       {tab === 'pyqs' && (
-        detail.pyqs.length ? (
-          <div className="content-list">
-            {detail.pyqs.map((paper) => (
-              <article className="content-item" key={paper.id}>
-                <div className="content-item-main">
-                  <strong>{paper.title || paper.original_filename}</strong>
-                  <p>{paper.description || 'No description provided.'}</p>
-                  <div className="content-meta">
-                    <span>{paper.exam_type}</span>
-                    {paper.cie_number && <span>CIE {paper.cie_number}</span>}
-                    <span>{paper.examination_year ?? 'Year not set'}</span>
-                    {statusTag(paper.verification_status)}
+        <div role="tabpanel" id="panel-pyqs" aria-labelledby="tab-pyqs" tabIndex={0}>
+          {detail.pyqs.length ? (
+            <div className="content-list">
+              {detail.pyqs.map((paper) => (
+                <article className="content-item" key={paper.id}>
+                  <div className="content-item-main">
+                    <strong>{paper.title || paper.original_filename}</strong>
+                    <p>{paper.description || 'No description provided.'}</p>
+                    <div className="content-meta">
+                      <span>{paper.exam_type}</span>
+                      {paper.cie_number && <span>CIE {paper.cie_number}</span>}
+                      <span>{paper.examination_year ?? 'Year not set'}</span>
+                      {statusTag(paper.verification_status)}
+                    </div>
                   </div>
-                </div>
-                <div className="content-item-side">
-                  <ContentActions
-                    label={paper.title || paper.original_filename}
-                    busy={busy?.id === paper.id}
-                    onView={() => void view('pyq', paper.id)}
-                    onDownload={() => void download('pyq', paper.id)}
-                  />
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : <EmptyState title="No previous year questions" description="No published question papers exist for this subject yet." />
+                  <div className="content-item-side">
+                    <ContentActions
+                      withLabels
+                      label={paper.title || paper.original_filename}
+                      busy={busy?.id === paper.id}
+                      onView={() => void view('pyq', paper.id)}
+                      onDownload={() => void download('pyq', paper.id)}
+                    />
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="No previous year questions" description="No published question papers exist for this subject yet." />
+          )}
+        </div>
       )}
 
       {tab === 'resources' && (
-        detail.resources.length ? (
-          <div className="content-list">
-            {detail.resources.map((resource) => (
-              <article className="content-item" key={resource.id}>
-                <div className="content-item-main">
-                  <strong>{resource.title}</strong>
-                  <p>{resource.description || 'No description provided.'}</p>
-                  <div className="content-meta">
-                    <span>{resource.resource_type.replaceAll('_', ' ')}</span>
-                    <span>{resource.file_type.toUpperCase()}</span>
-                    {statusTag(resource.verification_status)}
+        <div role="tabpanel" id="panel-resources" aria-labelledby="tab-resources" tabIndex={0}>
+          {detail.resources.length ? (
+            <div className="content-list">
+              {detail.resources.map((resource) => (
+                <article className="content-item" key={resource.id}>
+                  <div className="content-item-main">
+                    <strong>{resource.title}</strong>
+                    <p>{resource.description || 'No description provided.'}</p>
+                    <div className="content-meta">
+                      <span>{resource.resource_type.replaceAll('_', ' ')}</span>
+                      <span>{resource.file_type.toUpperCase()}</span>
+                      {statusTag(resource.verification_status)}
+                    </div>
                   </div>
-                </div>
-                <div className="content-item-side">
-                  <ContentActions
-                    label={resource.title}
-                    busy={busy?.id === resource.id}
-                    viewDisabled={!isPdfFile(resource.file_type)}
-                    viewHint={isPdfFile(resource.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
-                    onView={() => void view('resource', resource.id)}
-                    onDownload={() => void download('resource', resource.id)}
-                  />
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : <EmptyState title="No learning resources" description="No published learning resources exist for this subject yet." />
+                  <div className="content-item-side">
+                    <ContentActions
+                      withLabels
+                      label={resource.title}
+                      busy={busy?.id === resource.id}
+                      viewDisabled={!isPdfFile(resource.file_type)}
+                      viewHint={isPdfFile(resource.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                      onView={() => void view('resource', resource.id)}
+                      onDownload={() => void download('resource', resource.id)}
+                    />
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="No learning resources" description="No published learning resources exist for this subject yet." />
+          )}
+        </div>
       )}
     </section>
   )

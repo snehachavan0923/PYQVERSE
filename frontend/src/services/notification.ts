@@ -33,7 +33,7 @@ function baseOptions(theme: Theme) {
   return {
     background: 'transparent',
     color: 'inherit',
-    iconColor: theme === 'dark' ? '#62c4a7' : '#176b5b',
+    iconColor: theme === 'dark' ? '#818CF8' : '#6366F1',
     buttonsStyling: false,
     reverseButtons: true,
     focusCancel: false,

@@ -90,7 +90,7 @@ export default function StudentSyllabus() {
     <section className="dashboard-page">
       <PageHeader
         eyebrow="Syllabus"
-        title="Syllabus documents"
+        title="Syllabus Documents"
         description="Only published syllabus documents for your enrolled subjects are listed."
       />
       <form className="filter-bar" onSubmit={submitSearch}>
@@ -127,6 +127,7 @@ export default function StudentSyllabus() {
               </div>
               <div className="content-item-side">
                 <ContentActions
+                  withLabels
                   label={document.original_filename}
                   busy={busy?.id === document.id}
                   viewDisabled={!isPdfFile(document.file_type)}
