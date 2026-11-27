@@ -316,3 +316,109 @@ def test_download_link_only_resource_returns_400():
             )
         assert s_exc.value.status_code == 400
         assert "no downloadable file" in s_exc.value.detail.lower()
+
+
+def test_admin_update_resource_subject_reassignment():
+    from app.schemas.content import ResourceUpdate
+    old_subject_id = uuid.uuid4()
+    new_subject_id = uuid.uuid4()
+    scheme_id = uuid.uuid4()
+    semester_id = uuid.uuid4()
+    resource_id = uuid.uuid4()
+
+    resource = SimpleNamespace(
+        id=resource_id,
+        title="ADLD Notes",
+        description="Logic design material",
+        subject_id=old_subject_id,
+        academic_scheme_id=scheme_id,
+        semester_id=semester_id,
+        unit_id=None,
+        resource_type="NOTES",
+        resource_source="FILE",
+        external_url=None,
+        link_title=None,
+        original_filename="notes.pdf",
+        file_type="pdf",
+        file_size=1024,
+        verification_status=VerificationStatus.VERIFIED,
+        active=True,
+        uploaded_at=None,
+        uploaded_by=None,
+        updated_at=None,
+    )
+    new_subject = SimpleNamespace(
+        id=new_subject_id,
+        code="CS234AI",
+        name="Applied Digital Logic Design",
+        academic_scheme_id=scheme_id,
+        semester_id=semester_id,
+        active=True,
+    )
+
+    mock_db = MagicMock()
+    mock_db.get.side_effect = lambda model, obj_id: (
+        resource if obj_id == resource_id else new_subject if obj_id == new_subject_id else None
+    )
+
+    res = content_routes.admin_update_resource(
+        resource_id=resource_id,
+        payload=ResourceUpdate(subject_id=new_subject_id),
+        admin=_admin(),
+        db=mock_db,
+    )
+
+    assert resource.subject_id == new_subject_id
+    assert res["subject_code"] == "CS234AI"
+    assert res["subject_name"] == "Applied Digital Logic Design"
+
+
+def test_student_list_resources_shows_verified_active_and_respects_subject_scope():
+    subject_id = uuid.uuid4()
+    scheme_id = uuid.uuid4()
+    semester_id = uuid.uuid4()
+
+    student_user = _student()
+    profile = SimpleNamespace(
+        id=uuid.uuid4(),
+        academic_scheme_id=scheme_id,
+        current_semester_id=semester_id,
+        branch_id=None,
+    )
+
+    verified_resource = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="ADLD Both Resource",
+        description="Notes and YouTube video",
+        subject_id=subject_id,
+        academic_scheme_id=scheme_id,
+        semester_id=semester_id,
+        unit_id=None,
+        resource_type="STUDY_MATERIAL",
+        resource_source="BOTH",
+        external_url="https://www.youtube.com/watch?v=v4J1Cpr_XUw",
+        link_title="ADLD Video Lecture",
+        original_filename="adld.pdf",
+        file_type="pdf",
+        file_size=2048,
+        verification_status=VerificationStatus.VERIFIED,
+        active=True,
+        uploaded_at=None,
+        uploaded_by=None,
+    )
+    subject = SimpleNamespace(id=subject_id, code="CS234AI", name="ADLD", active=True)
+
+    mock_db = MagicMock()
+    mock_db.scalars.return_value.all.return_value = [verified_resource]
+    mock_db.scalars.return_value.first.return_value = profile
+
+    with patch("app.api.content_routes._student_profile", return_value=profile), \
+         patch("app.api.content_routes._enrolled_subject_ids", return_value={subject_id}), \
+         patch("app.api.content_routes._subjects_map", return_value={subject_id: subject}):
+        result = content_routes.student_list_resources(student=student_user, db=mock_db)
+
+    assert result["total"] == 1
+    assert result["items"][0]["title"] == "ADLD Both Resource"
+    assert result["items"][0]["resource_source"] == "BOTH"
+    assert result["items"][0]["external_url"] == "https://www.youtube.com/watch?v=v4J1Cpr_XUw"
+    assert result["items"][0]["subject_code"] == "CS234AI"

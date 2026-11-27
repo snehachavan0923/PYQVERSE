@@ -235,6 +235,7 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
     description: '',
     status: 'DRAFT',
     resource_type: 'NOTES',
+    subject_id: '',
   })
 
   const load = useCallback(() => {
@@ -251,9 +252,9 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
 
   useEffect(() => {
     if (!uploadForm.subject_id && activeSubjects[0]) {
-      setUploadForm((current) => ({ ...current, subject_id: activeSubjects[0].id }))
+      setUploadForm((current) => ({ ...current, subject_id: filterSubjectId || activeSubjects[0].id }))
     }
-  }, [activeSubjects, uploadForm.subject_id])
+  }, [activeSubjects, filterSubjectId, uploadForm.subject_id])
 
   useEffect(() => {
     if (kind === 'resource' && uploadForm.subject_id) {
@@ -275,12 +276,19 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   }
 
   const resetUploadForm = () => {
-    setUploadForm(emptyUploadForm())
+    setUploadForm({
+      ...emptyUploadForm(),
+      subject_id: filterSubjectId || '',
+    })
     setUploadError('')
   }
 
   const openUpload = () => {
     setUploadError('')
+    setUploadForm((current) => ({
+      ...current,
+      subject_id: filterSubjectId || current.subject_id || '',
+    }))
     setUploadOpen(true)
   }
 
@@ -431,6 +439,7 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
       description: item.description ?? '',
       status: item.verification_status,
       resource_type: isResource(item) ? item.resource_type : 'NOTES',
+      subject_id: item.subject_id ?? '',
     })
   }
 
@@ -443,6 +452,9 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
       title: editForm.title.trim(),
       description: editForm.description.trim() || null,
       status: editForm.status,
+    }
+    if (editForm.subject_id && editForm.subject_id !== editing.subject_id) {
+      body.subject_id = editForm.subject_id
     }
     if (kind === 'resource') body.resource_type = editForm.resource_type
     if (archived && statusChanged) {
@@ -644,6 +656,21 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
                 Cancel
               </button>
             </div>
+            <label>
+              Subject
+              <select
+                value={editForm.subject_id}
+                onChange={(event) => setEditForm({ ...editForm, subject_id: event.target.value })}
+                required
+              >
+                <option value="">Select subject</option>
+                {activeSubjects.map((subject) => (
+                  <option key={subject.id} value={subject.id}>
+                    {subject.code} — {subject.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               Title
               <input

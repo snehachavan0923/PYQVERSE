@@ -123,6 +123,24 @@ def _enrolled_subjects(db: Session, profile: StudentProfile) -> list[Subject]:
         )
     ).all()
     subject_ids = [enrollment.subject_id for enrollment in enrollments]
+
+    academic_scheme_id = getattr(profile, "academic_scheme_id", None)
+    current_semester_id = getattr(profile, "current_semester_id", None)
+    branch_id = getattr(profile, "branch_id", None)
+
+    if academic_scheme_id and current_semester_id:
+        try:
+            branch = db.get(Branch, branch_id) if branch_id else None
+            scheme = db.get(AcademicScheme, academic_scheme_id)
+            semester = db.get(Semester, current_semester_id)
+            if scheme and semester:
+                core_subjects = _core_subjects_for_branch(db, branch, scheme, semester)
+                for cs in core_subjects:
+                    if cs.id not in subject_ids:
+                        subject_ids.append(cs.id)
+        except Exception:
+            pass
+
     if not subject_ids:
         return []
     subjects = db.scalars(

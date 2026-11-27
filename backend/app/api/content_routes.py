@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,7 @@ from app.api.deps import require_admin, require_student
 from app.database.connection import get_db
 from app.models.academic import (
     AcademicScheme,
+    BranchSubjectOffering,
     Semester,
     StudentProfile,
     StudentSubjectEnrollment,
@@ -537,6 +538,10 @@ def admin_update_syllabus(
         raise HTTPException(status_code=404, detail="Syllabus version not found")
     previous_status = document.verification_status
     data = payload.model_dump(exclude_unset=True)
+    if "subject_id" in data and data["subject_id"] is not None:
+        new_subject = _subject_or_400(db, uuid.UUID(str(data["subject_id"])))
+        version.subject_id = new_subject.id
+        version.academic_scheme_id = new_subject.academic_scheme_id
     if "title" in data:
         document.title = clean_text(data["title"], field="Title", max_length=300)
     if "description" in data:
@@ -799,6 +804,12 @@ def admin_update_pyq(
                 status_code=409,
                 detail="An active question paper with identical PDF content already exists",
             )
+    if "subject_id" in data and data["subject_id"] is not None:
+        new_subject = _subject_or_400(db, uuid.UUID(str(data["subject_id"])))
+        paper.subject_id = new_subject.id
+        if document is not None:
+            document.academic_scheme_id = new_subject.academic_scheme_id
+            document.semester_id = new_subject.semester_id
     if "title" in data:
         paper.title = clean_text(data["title"], field="Title", max_length=300)
         document.title = paper.title
@@ -1024,6 +1035,15 @@ def admin_update_resource(
         raise HTTPException(status_code=404, detail="Learning resource not found")
     previous_status = resource.verification_status
     data = payload.model_dump(exclude_unset=True)
+    if "subject_id" in data and data["subject_id"] is not None:
+        new_subject = _subject_or_400(db, uuid.UUID(str(data["subject_id"])))
+        resource.subject_id = new_subject.id
+        resource.academic_scheme_id = new_subject.academic_scheme_id
+        resource.semester_id = new_subject.semester_id
+        if resource.unit_id:
+            unit = db.get(Unit, resource.unit_id)
+            if unit is None or unit.subject_id != new_subject.id:
+                resource.unit_id = None
     if "title" in data:
         resource.title = clean_text(data["title"], field="Title", max_length=300, required=True)
     if "description" in data:
@@ -1210,7 +1230,48 @@ def _enrolled_subject_ids(db: Session, profile: StudentProfile) -> set[uuid.UUID
             StudentSubjectEnrollment.active.is_(True),
         )
     ).all()
-    return {row.subject_id for row in rows}
+    enrolled_ids = {
+        row.subject_id if hasattr(row, "subject_id") else row
+        for row in rows
+    }
+    academic_scheme_id = getattr(profile, "academic_scheme_id", None)
+    current_semester_id = getattr(profile, "current_semester_id", None)
+    branch_id = getattr(profile, "branch_id", None)
+
+    if academic_scheme_id and current_semester_id:
+        try:
+            core_stmt = select(Subject).where(
+                Subject.academic_scheme_id == academic_scheme_id,
+                Subject.semester_id == current_semester_id,
+                Subject.subject_type == "CORE",
+                Subject.active.is_(True),
+            )
+            if branch_id:
+                offered_count = (
+                    db.scalar(
+                        select(func.count(BranchSubjectOffering.subject_id)).where(
+                            BranchSubjectOffering.branch_id == branch_id,
+                            BranchSubjectOffering.active.is_(True),
+                        )
+                    )
+                    or 0
+                )
+                if offered_count > 0:
+                    core_stmt = core_stmt.where(
+                        Subject.id.in_(
+                            select(BranchSubjectOffering.subject_id).where(
+                                BranchSubjectOffering.branch_id == branch_id,
+                                BranchSubjectOffering.active.is_(True),
+                            )
+                        )
+                    )
+            core_subjects = db.scalars(core_stmt).all()
+            for s in core_subjects:
+                s_id = s.id if hasattr(s, "id") else s
+                enrolled_ids.add(s_id)
+        except Exception:
+            pass
+    return enrolled_ids
 
 
 def _require_enrolled(subject_ids: set[uuid.UUID], subject_id: uuid.UUID) -> None:
@@ -1240,6 +1301,14 @@ def student_list_syllabus(
             SyllabusDocument.verification_status == VerificationStatus.VERIFIED,
         )
     )
+    academic_scheme_id = getattr(profile, "academic_scheme_id", None)
+    if academic_scheme_id:
+        statement = statement.where(
+            or_(
+                SyllabusVersion.academic_scheme_id.is_(None),
+                SyllabusVersion.academic_scheme_id == academic_scheme_id,
+            )
+        )
     if subject_id:
         _require_enrolled(subject_ids, subject_id)
         statement = statement.where(SyllabusVersion.subject_id == subject_id)
@@ -1281,6 +1350,22 @@ def student_list_pyqs(
             UploadedDocument.permission_status == PermissionStatus.APPROVED,
         )
     )
+    academic_scheme_id = getattr(profile, "academic_scheme_id", None)
+    current_semester_id = getattr(profile, "current_semester_id", None)
+    if academic_scheme_id:
+        statement = statement.where(
+            or_(
+                UploadedDocument.academic_scheme_id.is_(None),
+                UploadedDocument.academic_scheme_id == academic_scheme_id,
+            )
+        )
+    if current_semester_id:
+        statement = statement.where(
+            or_(
+                UploadedDocument.semester_id.is_(None),
+                UploadedDocument.semester_id == current_semester_id,
+            )
+        )
     if subject_id:
         _require_enrolled(subject_ids, subject_id)
         statement = statement.where(QuestionPaper.subject_id == subject_id)
@@ -1326,6 +1411,22 @@ def student_list_resources(
         LearningResource.active.is_(True),
         LearningResource.verification_status == VerificationStatus.VERIFIED,
     )
+    academic_scheme_id = getattr(profile, "academic_scheme_id", None)
+    current_semester_id = getattr(profile, "current_semester_id", None)
+    if academic_scheme_id:
+        statement = statement.where(
+            or_(
+                LearningResource.academic_scheme_id.is_(None),
+                LearningResource.academic_scheme_id == academic_scheme_id,
+            )
+        )
+    if current_semester_id:
+        statement = statement.where(
+            or_(
+                LearningResource.semester_id.is_(None),
+                LearningResource.semester_id == current_semester_id,
+            )
+        )
     if subject_id:
         _require_enrolled(subject_ids, subject_id)
         statement = statement.where(LearningResource.subject_id == subject_id)

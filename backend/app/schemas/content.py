@@ -10,6 +10,7 @@ class SyllabusUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     description: str | None = Field(default=None, max_length=4000)
     active: bool | None = None
+    subject_id: uuid.UUID | None = None
 
 
 class PyqUpdate(BaseModel):
@@ -18,6 +19,7 @@ class PyqUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     status: Literal["DRAFT", "PENDING", "VERIFIED", "REJECTED"] | None = None
     active: bool | None = None
+    subject_id: uuid.UUID | None = None
 
 
 class ResourceUpdate(BaseModel):
@@ -31,6 +33,7 @@ class ResourceUpdate(BaseModel):
     unit_id: str | None = None
     status: Literal["DRAFT", "PENDING", "VERIFIED", "REJECTED"] | None = None
     active: bool | None = None
+    subject_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def normalize_title(self):
