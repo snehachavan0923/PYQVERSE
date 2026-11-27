@@ -24,7 +24,14 @@ from app.models.learning import (
     QuestionType,
 )
 from app.models.document import PermissionStatus, QuestionPaper, UploadedDocument
-from app.models.progress import Bookmark, QuizAttempt, StudentProgress, StudentTopicActivity
+from app.models.progress import (
+    Bookmark,
+    PyqQuestionBookmark,
+    QuizAttempt,
+    StudentProgress,
+    StudentTopicActivity,
+    StudentTopicLearning,
+)
 from app.models.resource import LearningResource, ResourceType
 from app.models.question import (
     ContentReview,

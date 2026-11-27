@@ -13,7 +13,7 @@ from app.api import analysis_routes
 from app.api.deps import get_current_user, require_admin
 from app.database.connection import get_db
 from app.main import app
-from app.models.academic import Subject
+from app.models.academic import StudentProfile, StudentSubjectEnrollment, Subject
 from app.models.analysis import (
     AnalysisJob,
     AnalysisJobStatus,
@@ -397,10 +397,26 @@ def test_student_get_subject_analysis():
             }
         ],
         repeated_question_clusters=[],
-        recommendations={"study_first": [], "insufficient_data": False},
+        recommendations={"study_first": [], "insufficient_data": False, "syllabus_status": "AVAILABLE"},
     )
 
+    profile = StudentProfile(
+        id=uuid.uuid4(),
+        user_id=student.id,
+        student_name=student.full_name,
+        profile_completed=True,
+    )
+    enrollment = StudentSubjectEnrollment(
+        id=uuid.uuid4(),
+        student_profile_id=profile.id,
+        subject_id=sub_id,
+        semester_id=uuid.uuid4(),
+        academic_scheme_id=uuid.uuid4(),
+        active=True,
+    )
     db = MockAnalysisDB(entities={
+        (StudentProfile, profile.id): profile,
+        (StudentSubjectEnrollment, enrollment.id): enrollment,
         (Subject, sub_id): subject,
         (SubjectAnalysisSummary, summary.id): summary,
     })

@@ -11,20 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.connection import SessionLocal
-from app.models.analysis import (
-    AnalysisJob,
-    AnalysisJobStatus,
-    QuestionClassification,
-    QuestionSimilarity,
-    RepeatCategory,
-)
+from app.models.analysis import AnalysisJob, AnalysisJobStatus, QuestionClassification
 from app.models.document import QuestionPaper, UploadedDocument
-from app.models.question import DocumentPage, Question, QuestionOccurrence, QuestionTopicMap
-from app.models.syllabus import Subtopic, SyllabusDocument, SyllabusVersion, Topic, Unit, VerificationStatus
+from app.models.progress import PyqQuestionBookmark
+from app.models.question import DocumentPage, Question, QuestionTopicMap
+from app.models.syllabus import Subtopic, SyllabusVersion, Topic, Unit, VerificationStatus
 from app.services import storage
 from app.services.ai_provider import get_ai_provider
 from app.services.pdf_extraction import extract_questions_from_pdf
-from app.services.pyq_statistics import compute_subject_analysis
+from app.services.pyq_statistics import compute_subject_analysis, recompute_subject_similarities
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +33,6 @@ def get_subject_syllabus_structure(db: Session, subject_id: UUID) -> List[Dict[s
     )
 
     if not active_version:
-        # Fallback to any units belonging to the subject
         units = (
             db.scalars(
                 select(Unit)
@@ -58,38 +52,51 @@ def get_subject_syllabus_structure(db: Session, subject_id: UUID) -> List[Dict[s
         )
 
     structure: List[Dict[str, Any]] = []
-    for u in units:
+    for unit in units:
         topics = (
             db.scalars(
-                select(Topic).where(Topic.unit_id == u.id).order_by(Topic.order_index.asc())
+                select(Topic).where(Topic.unit_id == unit.id).order_by(Topic.order_index.asc())
             )
             .all()
         )
         topics_data = []
-        for t in topics:
+        for topic in topics:
             subtopics = (
                 db.scalars(
-                    select(Subtopic).where(Subtopic.topic_id == t.id).order_by(Subtopic.order_index.asc())
+                    select(Subtopic).where(Subtopic.topic_id == topic.id).order_by(Subtopic.order_index.asc())
                 )
                 .all()
             )
-            topics_data.append({
-                "id": t.id,
-                "title": t.title,
-                "order_index": t.order_index,
-                "subtopics": [{"id": st.id, "title": st.title} for st in subtopics],
-            })
-        structure.append({
-            "id": u.id,
-            "title": u.title,
-            "order_index": u.order_index,
-            "topics": topics_data,
-        })
+            topics_data.append(
+                {
+                    "id": topic.id,
+                    "title": topic.title,
+                    "order_index": topic.order_index,
+                    "subtopics": [{"id": sub.id, "title": sub.title} for sub in subtopics],
+                }
+            )
+        structure.append(
+            {
+                "id": unit.id,
+                "title": unit.title,
+                "order_index": unit.order_index,
+                "topics": topics_data,
+            }
+        )
 
     return structure
 
 
-def run_pyq_analysis_job(job_id: UUID, db_session: Optional[Session] = None) -> AnalysisJob:
+def _question_is_bookmarked(db: Session, question_id: UUID) -> bool:
+    return (
+        db.scalar(
+            select(PyqQuestionBookmark.id).where(PyqQuestionBookmark.question_id == question_id)
+        )
+        is not None
+    )
+
+
+def run_pyq_analysis_job(job_id: UUID, db_session: Optional[Session] = None) -> Optional[AnalysisJob]:
     """Execute the automated PYQ analysis pipeline for a specific AnalysisJob."""
     owns_session = db_session is None
     db = db_session if db_session is not None else SessionLocal()
@@ -109,6 +116,7 @@ def run_pyq_analysis_job(job_id: UUID, db_session: Optional[Session] = None) -> 
             return job
 
         job.started_at = datetime.now(timezone.utc)
+        job.error_message = None
 
         # ---------------- STAGE 1: EXTRACTING ----------------
         job.status = AnalysisJobStatus.EXTRACTING
@@ -127,219 +135,195 @@ def run_pyq_analysis_job(job_id: UUID, db_session: Optional[Session] = None) -> 
 
         extraction_result = extract_questions_from_pdf(pdf_bytes)
 
-        # Store DocumentPage entries
         existing_pages = db.scalars(
             select(DocumentPage).where(DocumentPage.document_id == document.id)
         ).all()
-        existing_page_nums = {p.page_number for p in existing_pages}
-
+        existing_page_numbers = {page.page_number for page in existing_pages}
         for page in extraction_result.pages:
-            if page.page_number not in existing_page_nums:
-                doc_page = DocumentPage(
-                    document_id=document.id,
-                    page_number=page.page_number,
-                    extracted_text=page.text,
+            if page.page_number not in existing_page_numbers:
+                db.add(
+                    DocumentPage(
+                        document_id=document.id,
+                        page_number=page.page_number,
+                        extracted_text=page.text,
+                    )
                 )
-                db.add(doc_page)
 
-        # Store or reconcile Questions
+        # Questions are identified by their stable extraction sequence.  This
+        # allows printed question numbers to repeat across pages/combined papers
+        # without colliding, while preserving bookmarks on re-analysis.
         existing_questions = db.scalars(
             select(Question).where(Question.document_id == document.id)
         ).all()
-        q_map = {q.question_number: q for q in existing_questions}
+        question_by_sequence = {question.sequence: question for question in existing_questions}
+        extracted_sequences = set()
 
         saved_questions: List[Question] = []
-        for eq in extraction_result.questions:
-            if eq.question_number in q_map:
-                q_row = q_map[eq.question_number]
-                q_row.extracted_text = eq.extracted_text
-                q_row.marks = eq.marks
-                q_row.original_page_number = eq.original_page_number
+        for extracted in extraction_result.questions:
+            extracted_sequences.add(extracted.sequence)
+            question_row = question_by_sequence.get(extracted.sequence)
+            if question_row:
+                question_row.question_number = extracted.question_number
+                question_row.extracted_text = extracted.extracted_text
+                question_row.marks = extracted.marks
+                question_row.original_page_number = extracted.original_page_number
             else:
-                q_row = Question(
+                question_row = Question(
                     document_id=document.id,
-                    question_number=eq.question_number,
-                    extracted_text=eq.extracted_text,
-                    marks=eq.marks,
-                    original_page_number=eq.original_page_number,
+                    question_number=extracted.question_number,
+                    sequence=extracted.sequence,
+                    extracted_text=extracted.extracted_text,
+                    marks=extracted.marks,
+                    original_page_number=extracted.original_page_number,
                     verification_status=VerificationStatus.DRAFT,
                 )
-                db.add(q_row)
-            saved_questions.append(q_row)
+                db.add(question_row)
+            saved_questions.append(question_row)
+
+        # Remove stale rows from an earlier extraction, but never delete a row a
+        # student has bookmarked.
+        for sequence, question_row in question_by_sequence.items():
+            if sequence in extracted_sequences:
+                continue
+            if _question_is_bookmarked(db, question_row.id):
+                continue
+            db.delete(question_row)
 
         db.flush()
         job.total_questions = len(saved_questions)
         job.progress_percent = 35
         db.commit()
 
+        if not saved_questions:
+            job.status = AnalysisJobStatus.FAILED
+            job.stage = "Extraction finished without readable questions"
+            job.error_message = (
+                "; ".join(extraction_result.notes)
+                or "No questions could be extracted from this PDF. The document may be scanned or image-only."
+            )
+            job.completed_at = datetime.now(timezone.utc)
+            job.model_name = "pyqverse-extraction-v2"
+            job.model_provider = "deterministic"
+            db.commit()
+            db.refresh(job)
+            return job
+
         # ---------------- STAGE 2: CLASSIFYING & MAPPING ----------------
         job.status = AnalysisJobStatus.CLASSIFYING
-        job.stage = "Classifying questions and mapping to syllabus topics"
+        job.stage = "Classifying questions and discovering provisional topics"
         job.progress_percent = 45
         db.commit()
 
         ai_provider = get_ai_provider()
         syllabus_structure = get_subject_syllabus_structure(db, paper.subject_id)
+        subject_code = None
+        subject_name = None
+        if paper.subject_id:
+            from app.models.academic import Subject
 
-        # Build topic lookup by title and ID
+            subject = db.get(Subject, paper.subject_id)
+            if subject:
+                subject_code = subject.code
+                subject_name = subject.name
+
         topic_lookup_by_title: Dict[str, Topic] = {}
-        for u in syllabus_structure:
-            for t_data in u.get("topics", []):
-                t_obj = db.get(Topic, t_data["id"])
-                if t_obj:
-                    topic_lookup_by_title[t_obj.title.lower()] = t_obj
+        for unit in syllabus_structure:
+            for topic_data in unit.get("topics", []):
+                topic_obj = db.get(Topic, topic_data["id"])
+                if topic_obj:
+                    topic_lookup_by_title[topic_obj.title.lower()] = topic_obj
 
         mapped_count = 0
         flagged_count = 0
-        conf_sum = 0.0
+        confidence_sum = 0.0
 
-        for q in saved_questions:
+        for question in saved_questions:
             classification_result = ai_provider.classify_question(
-                question_text=q.extracted_text,
-                marks=q.marks,
+                question_text=question.extracted_text,
+                marks=question.marks,
                 syllabus_units=syllabus_structure,
+                subject_code=subject_code,
+                subject_name=subject_name,
             )
+            confidence_sum += classification_result.confidence
 
-            conf_sum += classification_result.confidence
-
-            # Upsert QuestionClassification
-            existing_cl = db.scalar(
-                select(QuestionClassification).where(QuestionClassification.question_id == q.id)
-            )
-            if existing_cl:
-                existing_cl.main_topic = classification_result.main_topic
-                existing_cl.subtopic = classification_result.subtopic
-                existing_cl.related_concepts = classification_result.related_concepts
-                existing_cl.question_type = classification_result.question_type
-                existing_cl.difficulty = classification_result.difficulty
-                existing_cl.bloom_taxonomy = classification_result.bloom_taxonomy
-                existing_cl.unit_number = classification_result.unit_number
-                existing_cl.suggested_unit_title = classification_result.suggested_unit_title
-                existing_cl.suggested_topic_title = classification_result.suggested_topic_title
-                existing_cl.confidence = classification_result.confidence
-                existing_cl.explanation = classification_result.explanation
-                existing_cl.provisional = classification_result.provisional
-                existing_cl.model_name = classification_result.model_name
-                existing_cl.model_provider = classification_result.model_provider
-            else:
-                new_cl = QuestionClassification(
-                    question_id=q.id,
-                    main_topic=classification_result.main_topic,
-                    subtopic=classification_result.subtopic,
-                    related_concepts=classification_result.related_concepts,
-                    question_type=classification_result.question_type,
-                    difficulty=classification_result.difficulty,
-                    bloom_taxonomy=classification_result.bloom_taxonomy,
-                    unit_number=classification_result.unit_number,
-                    suggested_unit_title=classification_result.suggested_unit_title,
-                    suggested_topic_title=classification_result.suggested_topic_title,
-                    confidence=classification_result.confidence,
-                    explanation=classification_result.explanation,
-                    provisional=classification_result.provisional,
-                    model_name=classification_result.model_name,
-                    model_provider=classification_result.model_provider,
+            existing_classification = db.scalar(
+                select(QuestionClassification).where(
+                    QuestionClassification.question_id == question.id
                 )
-                db.add(new_cl)
+            )
+            if existing_classification:
+                classification = existing_classification
+            else:
+                classification = QuestionClassification(question_id=question.id)
+                db.add(classification)
 
-            # Map to QuestionTopicMap if candidate topic exists
+            classification.main_topic = classification_result.main_topic
+            classification.subtopic = classification_result.subtopic
+            classification.related_concepts = classification_result.related_concepts
+            classification.question_type = classification_result.question_type
+            classification.difficulty = classification_result.difficulty
+            classification.bloom_taxonomy = classification_result.bloom_taxonomy
+            classification.unit_number = classification_result.unit_number
+            classification.suggested_unit_title = classification_result.suggested_unit_title
+            classification.suggested_topic_title = classification_result.suggested_topic_title
+            classification.confidence = classification_result.confidence
+            classification.explanation = classification_result.explanation
+            classification.provisional = classification_result.provisional
+            classification.model_name = classification_result.model_name
+            classification.model_provider = classification_result.model_provider
+
             target_topic = None
             if classification_result.suggested_topic_title:
-                target_topic = topic_lookup_by_title.get(classification_result.suggested_topic_title.lower())
-
+                target_topic = topic_lookup_by_title.get(
+                    classification_result.suggested_topic_title.lower()
+                )
             if target_topic:
-                q_topic_map = db.get(QuestionTopicMap, (q.id, target_topic.id))
+                question_topic_map = db.get(QuestionTopicMap, (question.id, target_topic.id))
                 map_status = (
                     VerificationStatus.VERIFIED
                     if classification_result.confidence >= 0.80
                     else VerificationStatus.PENDING
                 )
-                if not q_topic_map:
-                    q_topic_map = QuestionTopicMap(
-                        question_id=q.id,
+                if not question_topic_map:
+                    question_topic_map = QuestionTopicMap(
+                        question_id=question.id,
                         topic_id=target_topic.id,
                         confidence=classification_result.confidence,
                         verification_status=map_status,
                     )
-                    db.add(q_topic_map)
+                    db.add(question_topic_map)
                 else:
-                    q_topic_map.confidence = classification_result.confidence
-                    q_topic_map.verification_status = map_status
+                    question_topic_map.confidence = classification_result.confidence
+                    question_topic_map.verification_status = map_status
                 mapped_count += 1
 
-            # Confidence decision logic
             if classification_result.confidence >= 0.80:
-                q.verification_status = VerificationStatus.VERIFIED
-            elif classification_result.confidence >= 0.60:
-                q.verification_status = VerificationStatus.PENDING
+                question.verification_status = VerificationStatus.VERIFIED
+            elif classification_result.confidence >= 0.65:
+                question.verification_status = VerificationStatus.PENDING
             else:
-                q.verification_status = VerificationStatus.DRAFT
+                question.verification_status = VerificationStatus.DRAFT
                 flagged_count += 1
 
         db.flush()
         job.mapped_questions = mapped_count
         job.flagged_questions = flagged_count
-        job.average_confidence = round(conf_sum / max(len(saved_questions), 1), 2)
+        job.average_confidence = round(confidence_sum / max(len(saved_questions), 1), 2)
         job.progress_percent = 65
         db.commit()
 
         # ---------------- STAGE 3: REPETITION DETECTION ----------------
         job.status = AnalysisJobStatus.MAPPING
-        job.stage = "Detecting exact and semantically similar repeats"
+        job.stage = "Detecting exact and reworded repeats across the subject"
         job.progress_percent = 75
         db.commit()
 
-        # Retrieve prior questions for this subject across other documents
-        other_questions = (
-            db.scalars(
-                select(Question)
-                .join(UploadedDocument, Question.document_id == UploadedDocument.id)
-                .where(
-                    UploadedDocument.subject_id == paper.subject_id,
-                    Question.document_id != document.id,
-                )
-            )
-            .all()
-        )
+        recompute_subject_similarities(db, paper.subject_id)
 
-        for q in saved_questions:
-            for oq in other_questions:
-                # Compare question pairs
-                sim_res = ai_provider.compare_questions(q.extracted_text, oq.extracted_text)
-                if sim_res.similarity_score >= 0.40:
-                    # Upsert similarity pair
-                    existing_sim = db.scalar(
-                        select(QuestionSimilarity).where(
-                            QuestionSimilarity.source_question_id == q.id,
-                            QuestionSimilarity.target_question_id == oq.id,
-                        )
-                    )
-                    if not existing_sim:
-                        existing_sim = QuestionSimilarity(
-                            source_question_id=q.id,
-                            target_question_id=oq.id,
-                            similarity_score=sim_res.similarity_score,
-                            repeat_category=sim_res.repeat_category,
-                            explanation=sim_res.explanation,
-                        )
-                        db.add(existing_sim)
-
-                    # If exact repeat or reworded repeat, record QuestionOccurrence
-                    if sim_res.repeat_category in [RepeatCategory.EXACT_REPEAT, RepeatCategory.REWORDED_REPEAT]:
-                        db.add(
-                            QuestionOccurrence(
-                                question_id=oq.id,
-                                document_id=document.id,
-                                occurrence_label=f"Repeated in {paper.examination_year} ({q.question_number})",
-                            )
-                        )
-
-        db.flush()
-        job.progress_percent = 85
-        db.commit()
-
-        # ---------------- STAGE 4: STATISTICAL ANALYSIS & INSIGHTS ----------------
+        # ---------------- STAGE 4: STATISTICAL ANALYSIS ----------------
         job.status = AnalysisJobStatus.ANALYZING
-        job.stage = "Aggregating topic frequencies, priority scores, and student recommendations"
+        job.stage = "Aggregating topic frequencies, marks, and historical priority"
         job.progress_percent = 90
         db.commit()
 
@@ -348,10 +332,15 @@ def run_pyq_analysis_job(job_id: UUID, db_session: Optional[Session] = None) -> 
         # ---------------- STAGE 5: COMPLETION ----------------
         if flagged_count > 0:
             job.status = AnalysisJobStatus.FLAGGED_REVIEW
-            job.stage = f"Completed with {flagged_count} question(s) flagged for admin review"
+            job.stage = f"Completed with {flagged_count} provisional question(s) flagged for review"
         else:
             job.status = AnalysisJobStatus.COMPLETED
-            job.stage = "Analysis complete. All questions verified."
+            job.stage = "Analysis complete"
+
+        if extraction_result.low_confidence_extraction:
+            note = "; ".join(extraction_result.notes)
+            if note:
+                job.stage = f"{job.stage}. {note}"
 
         job.progress_percent = 100
         job.completed_at = datetime.now(timezone.utc)

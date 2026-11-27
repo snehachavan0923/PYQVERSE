@@ -15,12 +15,13 @@ class Question(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("uploaded_documents.id", ondelete="CASCADE"), nullable=False)
     question_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     extracted_text: Mapped[str] = mapped_column(Text, nullable=False)
     marks: Mapped[int | None] = mapped_column(Integer)
     original_page_number: Mapped[int | None] = mapped_column(Integer)
     verification_status: Mapped[VerificationStatus] = mapped_column(Enum(VerificationStatus, name="verification_status"), nullable=False, default=VerificationStatus.DRAFT)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-    __table_args__ = (UniqueConstraint("document_id", "question_number", name="uq_question_document_number"),)
+    __table_args__ = (UniqueConstraint("document_id", "sequence", name="uq_question_document_sequence"),)
 
 
 class DocumentPage(Base):
