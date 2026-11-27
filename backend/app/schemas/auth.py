@@ -50,6 +50,30 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=1)
 
 
+class OtpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr
+
+
+class ResendConfirmationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr
+
+
+class OtpVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr
+    token: str = Field(min_length=6, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_token(self):
+        stripped = self.token.strip()
+        if not re.fullmatch(r"^\d{6}$", stripped):
+            raise ValueError("Verification code must be a 6-digit number")
+        self.token = stripped
+        return self
+
+
 class OnboardingRequest(BaseModel):
     full_name: str = Field(min_length=2, max_length=200)
     usn: str | None = Field(default=None, max_length=30)

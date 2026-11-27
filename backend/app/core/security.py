@@ -5,7 +5,7 @@ from time import monotonic
 
 from fastapi import Header, HTTPException, status
 from email_validator import EmailNotValidError, validate_email
-from supabase import Client, create_client
+from supabase import Client, ClientOptions, create_client
 
 from app.core.config import settings
 
@@ -121,7 +121,11 @@ def create_supabase_anon_client() -> Client:
             status_code=503,
             detail="Supabase Auth is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY.",
         )
-    return create_client(settings.SUPABASE_URL, settings.SUPABASE_ANON_KEY)
+    return create_client(
+        settings.SUPABASE_URL,
+        settings.SUPABASE_ANON_KEY,
+        options=ClientOptions(storage_client_timeout=180),
+    )
 
 
 def create_supabase_service_client() -> Client:
@@ -135,7 +139,11 @@ def create_supabase_service_client() -> Client:
             status_code=503,
             detail="Server-side Supabase administration is not configured.",
         )
-    return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+    return create_client(
+        settings.SUPABASE_URL,
+        settings.SUPABASE_SERVICE_ROLE_KEY,
+        options=ClientOptions(storage_client_timeout=180),
+    )
 
 
 def rate_limit(key: str, limit: int = 5, window_seconds: int = 300) -> None:

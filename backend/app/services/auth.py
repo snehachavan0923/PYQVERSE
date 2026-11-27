@@ -55,7 +55,7 @@ def synchronized_user(db: Session, access_token: str) -> tuple[User, Any]:
 
     if user.account_status != AccountStatus.ACTIVE:
         raise HTTPException(status_code=403, detail="Account is inactive")
-    if not confirmed:
+    if not confirmed and not getattr(user, "email_verified", False):
         raise HTTPException(status_code=403, detail="Email verification is required")
 
     user.supabase_auth_id = auth_uuid

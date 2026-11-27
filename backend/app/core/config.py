@@ -8,8 +8,12 @@ from pydantic import BaseModel, Field, field_validator
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 PROJECT_DIR = BACKEND_DIR.parent
-load_dotenv(BACKEND_DIR / ".env")
+load_dotenv(BACKEND_DIR / ".env", override=True)
 load_dotenv(PROJECT_DIR / ".env", override=False)
+
+EXPECTED_STAGING_PROJECT_REF = "fauzmbfcvivzpkmisrrj"
+EXPECTED_STAGING_SUPABASE_HOSTNAME = f"{EXPECTED_STAGING_PROJECT_REF}.supabase.co"
+EXPECTED_STAGING_SUPABASE_URL = f"https://{EXPECTED_STAGING_SUPABASE_HOSTNAME}"
 
 
 class Settings(BaseModel):

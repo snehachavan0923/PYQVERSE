@@ -10,6 +10,8 @@ from app.models.academic import (
     AcademicScheme,
     Branch,
     BranchSubjectOffering,
+    ElectiveBasket,
+    ElectiveOption,
     Semester,
     StudentProfile,
     StudentSubjectEnrollment,
@@ -65,6 +67,69 @@ def list_semesters(db: Session = Depends(get_db)):
     return db.scalars(select(Semester).where(Semester.active.is_(True)).order_by(Semester.number)).all()
 
 
+@router.get("/api/v1/academic/electives", response_model=list[SubjectResponse])
+def list_electives(
+    db: Session = Depends(get_db),
+    branch_id: uuid.UUID | None = None,
+    scheme_id: uuid.UUID | None = None,
+    semester_id: uuid.UUID | None = None,
+):
+    branch = None
+    scheme = None
+    semester = None
+
+    if branch_id:
+        branch = db.get(Branch, branch_id)
+        if branch is None or not branch.active:
+            raise HTTPException(status_code=400, detail="Invalid branch")
+    if scheme_id:
+        scheme = db.get(AcademicScheme, scheme_id)
+        if scheme is None or not scheme.active:
+            raise HTTPException(status_code=400, detail="Invalid academic scheme")
+        if branch and scheme.college_id != branch.college_id:
+            raise HTTPException(status_code=400, detail="Branch and scheme belong to different colleges")
+    if semester_id:
+        semester = db.get(Semester, semester_id)
+        if semester is None or not semester.active:
+            raise HTTPException(status_code=400, detail="Invalid semester")
+        if scheme and semester.academic_scheme_id != scheme.id:
+            raise HTTPException(status_code=400, detail="Semester does not belong to the selected scheme")
+
+    branch_scope = (
+        or_(ElectiveBasket.branch_id == branch.id, ElectiveBasket.branch_id.is_(None))
+        if branch
+        else ElectiveBasket.branch_id.is_(None)
+    )
+
+    statement = (
+        select(Subject)
+        .join(ElectiveOption, ElectiveOption.subject_id == Subject.id)
+        .join(ElectiveBasket, ElectiveBasket.id == ElectiveOption.basket_id)
+        .where(
+            Subject.active.is_(True),
+            Subject.subject_type == "ELECTIVE",
+            ElectiveBasket.active.is_(True),
+            or_(
+                Subject.source_verification_status.is_(None),
+                Subject.source_verification_status == "VERIFIED",
+            ),
+            branch_scope,
+        )
+    )
+    if scheme:
+        statement = statement.where(
+            Subject.academic_scheme_id == scheme.id,
+            ElectiveBasket.academic_scheme_id == scheme.id,
+        )
+    if semester:
+        statement = statement.where(
+            Subject.semester_id == semester.id,
+            ElectiveBasket.semester_id == semester.id,
+        )
+
+    return db.scalars(statement.distinct().order_by(Subject.code)).all()
+
+
 @router.get("/api/v1/subjects", response_model=list[SubjectResponse])
 def list_subjects(
     db: Session = Depends(get_db),
@@ -79,12 +144,24 @@ def list_subjects(
         branch = db.get(Branch, branch_id)
         if branch is None or not branch.active:
             raise HTTPException(status_code=400, detail="Invalid branch")
+        elective_scope = select(ElectiveOption.subject_id).join(
+            ElectiveBasket, ElectiveBasket.id == ElectiveOption.basket_id
+        ).where(
+            ElectiveBasket.active.is_(True),
+            or_(
+                ElectiveBasket.branch_id == branch.id,
+                ElectiveBasket.branch_id.is_(None),
+            ),
+        )
         statement = statement.where(
-            Subject.id.in_(
-                select(BranchSubjectOffering.subject_id).where(
-                    BranchSubjectOffering.branch_id == branch.id,
-                    BranchSubjectOffering.active.is_(True),
-                )
+            or_(
+                Subject.id.in_(
+                    select(BranchSubjectOffering.subject_id).where(
+                        BranchSubjectOffering.branch_id == branch.id,
+                        BranchSubjectOffering.active.is_(True),
+                    )
+                ),
+                Subject.id.in_(elective_scope),
             )
         )
         statement = statement.where(
@@ -107,7 +184,7 @@ def list_subjects(
         if scheme and semester.academic_scheme_id != scheme.id:
             raise HTTPException(status_code=400, detail="Semester does not belong to the selected scheme")
         statement = statement.where(Subject.semester_id == semester_id)
-    return db.scalars(statement.order_by(Subject.code)).all()
+    return db.scalars(statement.distinct().order_by(Subject.code)).all()
 
 
 @router.get("/api/v1/subjects/{subject_id}", response_model=SubjectResponse)

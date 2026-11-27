@@ -8,6 +8,7 @@ never leaves the backend.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 
 from fastapi import HTTPException
@@ -102,13 +103,18 @@ def create_signed_url(
     """
     bucket = _bucket()
     options = {"download": download_filename} if download_filename else None
-    try:
-        if options is None:
-            result = bucket.create_signed_url(path, expires_in)
-        else:
-            result = bucket.create_signed_url(path, expires_in, options=options)
-    except Exception as exc:
-        raise StorageError("A secure download link could not be created") from exc
+    result = None
+    for attempt in range(1, 4):
+        try:
+            if options is None:
+                result = bucket.create_signed_url(path, expires_in)
+            else:
+                result = bucket.create_signed_url(path, expires_in, options=options)
+            break
+        except Exception as exc:
+            if attempt == 3:
+                raise StorageError("A secure download link could not be created") from exc
+            time.sleep(0.5 * attempt)
     if isinstance(result, dict):
         url = result.get("signedURL") or result.get("signedUrl") or result.get("signed_url")
     else:

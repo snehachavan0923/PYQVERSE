@@ -1,5 +1,8 @@
+import logging
 import uuid
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_, select
@@ -11,6 +14,7 @@ from app.core.security import (
     create_supabase_anon_client,
     create_supabase_service_client,
     log_supabase_auth_error,
+    normalize_admin_email,
     rate_limit,
     registration_error_response,
     validate_student_email,
@@ -40,14 +44,31 @@ from app.schemas.admin import (
 from app.schemas.auth import (
     LoginRequest,
     OnboardingRequest,
+    OtpRequest,
+    OtpVerifyRequest,
     PasswordResetRequest,
     RefreshRequest,
     RegisterRequest,
+    ResendConfirmationRequest,
 )
 from app.services.auth import require_role, synchronized_user
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
+
+
+def mask_email(email: str) -> str:
+    parts = email.split("@")
+    if len(parts) != 2:
+        return email
+    local, domain = parts
+    if len(local) <= 1:
+        masked_local = "*"
+    elif len(local) <= 3:
+        masked_local = local[0] + "*" * (len(local) - 1)
+    else:
+        masked_local = local[0] + "*****"
+    return f"{masked_local}@{domain}"
 
 
 def session_payload(response):
@@ -335,6 +356,196 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         **session,
         "profile": _profile_payload(db, user),
     }
+
+
+@router.post("/otp/request")
+def request_otp(payload: OtpRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = request.client.host if request.client else "unknown"
+    rate_limit(f"otp-request-ip:{client_ip}", limit=10, window_seconds=300)
+
+    raw_email = str(payload.email).strip().lower()
+    if raw_email.endswith("@rvce.edu.in"):
+        email = validate_student_email(raw_email)
+    else:
+        email = normalize_admin_email(raw_email)
+        admin_user = db.scalars(select(User).where(User.email == email)).first()
+        if not admin_user or admin_user.role != UserRole.ADMIN_FACULTY:
+            raise HTTPException(
+                status_code=400,
+                detail="Student email must end with @rvce.edu.in",
+            )
+
+    rate_limit(f"otp-request:{email}:{client_ip}", limit=3, window_seconds=300)
+
+    user = db.scalars(select(User).where(User.email == email)).first()
+    if user and user.account_status != AccountStatus.ACTIVE:
+        raise HTTPException(status_code=403, detail="Account is inactive")
+
+    # If the user is unknown in PYQVERSE, return generic message without triggering OTP creation
+    if user is None:
+        return {
+            "message": "If an eligible account exists for this email, a verification code has been sent.",
+            "email": mask_email(email),
+        }
+
+    client = create_supabase_anon_client()
+    try:
+        client.auth.sign_in_with_otp({
+            "email": email,
+            "options": {"should_create_user": False},
+        })
+    except Exception as exc:
+        status_code, error_code = log_supabase_auth_error("otp-request", exc)
+        normalized_code = (error_code or "").lower()
+        err_msg = str(getattr(exc, "message", exc)).lower()
+
+        if normalized_code == "otp_disabled" or "otp disabled" in err_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Email OTP authentication is disabled in the authentication service.",
+            ) from exc
+
+        if normalized_code == "user_not_found" or "user not found" in err_msg:
+            raise HTTPException(
+                status_code=404,
+                detail="No authentication account found for this email. Please check your credentials or register.",
+            ) from exc
+
+        if normalized_code == "signups_not_allowed":
+            raise HTTPException(
+                status_code=403,
+                detail="New signups are currently not allowed in the authentication service.",
+            ) from exc
+
+        if status_code == 429 or "rate_limit" in normalized_code or "over_email_send_rate_limit" in normalized_code:
+            raise HTTPException(
+                status_code=429,
+                detail="Email sending is temporarily rate limited. Please wait at least 60 seconds before requesting another code.",
+            ) from exc
+        if status_code is None or status_code >= 500:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is temporarily unavailable. Try again shortly.",
+            ) from exc
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to send verification code. Try again later.",
+        ) from exc
+
+    return {
+        "message": "Verification code sent",
+        "email": mask_email(email),
+    }
+
+
+@router.post("/otp/verify")
+def verify_otp(payload: OtpVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = request.client.host if request.client else "unknown"
+    raw_email = str(payload.email).strip().lower()
+    token = payload.token.strip()
+
+    if raw_email.endswith("@rvce.edu.in"):
+        email = validate_student_email(raw_email)
+    else:
+        email = normalize_admin_email(raw_email)
+
+    rate_limit(f"otp-verify:{email}:{client_ip}", limit=5, window_seconds=300)
+
+    client = create_supabase_anon_client()
+    response = None
+    last_exc = None
+    # Support both OTP login (type: "email") and signup confirmation codes (type: "signup")
+    for otp_type in ("email", "signup"):
+        try:
+            response = client.auth.verify_otp({
+                "email": email,
+                "token": token,
+                "type": otp_type,
+            })
+            if getattr(response, "session", None):
+                break
+        except Exception as exc:
+            last_exc = exc
+            status_code, error_code = log_supabase_auth_error(f"otp-verify-{otp_type}", exc)
+            if status_code == 429:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many verification attempts. Try again shortly.",
+                ) from exc
+            if status_code is None or status_code >= 500:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Authentication service is temporarily unavailable. Try again shortly.",
+                ) from exc
+            continue
+
+    if not response or not getattr(response, "session", None):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired verification code",
+        ) from (last_exc or HTTPException(status_code=401))
+
+    session = session_payload(response)
+    if not session["access_token"]:
+        raise HTTPException(status_code=401, detail="Verification did not create a session")
+
+    user, _ = synchronized_user(db, session["access_token"])
+    user.last_login_at = datetime.now(timezone.utc)
+    user.email_verified = True
+    db.add(user)
+    db.commit()
+
+    return {
+        **session,
+        "profile": _profile_payload(db, user),
+    }
+
+
+@router.post("/resend-confirmation")
+def resend_confirmation(
+    payload: ResendConfirmationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    client_ip = request.client.host if request.client else "unknown"
+    raw_email = str(payload.email).strip().lower()
+    email = validate_student_email(raw_email)
+
+    rate_limit(f"resend-confirm:{email}:{client_ip}", limit=3, window_seconds=300)
+
+    user = db.scalars(select(User).where(User.email == email)).first()
+    if not user:
+        return {"message": "If an eligible account exists for this email, a confirmation message has been sent."}
+
+    if user.email_verified:
+        return {"message": "Account is already verified. You can sign in."}
+
+    client = create_supabase_anon_client()
+    try:
+        client.auth.resend({
+            "type": "signup",
+            "email": email,
+        })
+    except Exception as exc:
+        status_code, error_code = log_supabase_auth_error("resend-confirmation", exc)
+        normalized_code = (error_code or "").lower()
+        if (
+            status_code == 429
+            or "rate_limit" in normalized_code
+            or "over_email_send_rate_limit" in normalized_code
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Confirmation email sending is temporarily rate limited. Please wait at least 60 seconds before requesting another email.",
+            ) from exc
+        if status_code is None or status_code >= 500:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is temporarily unavailable. Try again shortly.",
+            ) from exc
+        return {"message": "If an eligible account exists for this email, a confirmation message has been sent."}
+
+    return {"message": "Confirmation message sent. Check your email."}
 
 
 @router.post("/refresh")
