@@ -3,6 +3,10 @@ import { render, screen, waitFor } from '@testing-library/react'
 
 const mocks = vi.hoisted(() => ({
   getStudentAnalysis: vi.fn(),
+  listBookmarkedQuestions: vi.fn(),
+  bookmarkQuestion: vi.fn(),
+  removeQuestionBookmark: vi.fn(),
+  updateTopicProgress: vi.fn(),
 }))
 
 vi.mock('../context/AuthContext', () => ({
@@ -17,6 +21,17 @@ vi.mock('../hooks/useStudentSubjects', () => ({
 
 vi.mock('../services/analysisApi', () => ({
   getStudentAnalysis: mocks.getStudentAnalysis,
+  listBookmarkedQuestions: mocks.listBookmarkedQuestions,
+  bookmarkQuestion: mocks.bookmarkQuestion,
+  removeQuestionBookmark: mocks.removeQuestionBookmark,
+  updateTopicProgress: mocks.updateTopicProgress,
+}))
+
+vi.mock('../services/notification', () => ({
+  default: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
 }))
 
 import StudentPyqInsights from '../pages/StudentPyqInsights'
@@ -24,6 +39,7 @@ import StudentPyqInsights from '../pages/StudentPyqInsights'
 describe('StudentPyqInsights Page', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.listBookmarkedQuestions.mockResolvedValue({ items: [], total: 0 })
   })
 
   it('renders overview stats, unit breakdown, and high-return topic rankings', async () => {
@@ -34,6 +50,8 @@ describe('StudentPyqInsights Page', () => {
       total_papers: 4,
       total_questions: 36,
       coverage_score: 82.5,
+      syllabus_status: 'AVAILABLE',
+      data_availability: 'AVAILABLE',
       unit_stats: [
         {
           unit_id: 'u-1',
@@ -95,6 +113,7 @@ describe('StudentPyqInsights Page', () => {
         ],
         coverage_gaps: [],
         insufficient_data: false,
+        syllabus_status: 'AVAILABLE',
       },
       calculated_at: '2026-11-27T10:00:00Z',
     })

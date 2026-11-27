@@ -3,10 +3,13 @@ import { useAuth } from '../context/AuthContext'
 import { errorDetail } from '../services/authApi'
 import {
   listAnalysisJobs,
+  getAnalysisOverview,
+  syncAnalysisJobs,
   retryAnalysisJob,
   listFlaggedQuestions,
   correctQuestion,
   type AnalysisJobItem,
+  type AnalysisOverview,
   type FlaggedQuestionItem,
 } from '../services/analysisApi'
 import notifications from '../services/notification'
@@ -19,9 +22,11 @@ export default function AdminAnalysis() {
   const [activeTab, setActiveTab] = useState<'jobs' | 'flagged'>('jobs')
   const [jobs, setJobs] = useState<AnalysisJobItem[] | null>(null)
   const [flagged, setFlagged] = useState<FlaggedQuestionItem[] | null>(null)
+  const [overview, setOverview] = useState<AnalysisOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [retryingId, setRetryingId] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
   // Review modal state
   const [selectedQuestion, setSelectedQuestion] = useState<FlaggedQuestionItem | null>(null)
@@ -35,13 +40,20 @@ export default function AdminAnalysis() {
     setLoading(true)
     setError('')
 
+    const overviewPromise =
+      typeof getAnalysisOverview === 'function'
+        ? getAnalysisOverview(session).catch(() => null)
+        : Promise.resolve(null)
+
     Promise.all([
       listAnalysisJobs(session),
       listFlaggedQuestions(session),
+      overviewPromise,
     ])
-      .then(([jobsRes, flaggedRes]) => {
+      .then(([jobsRes, flaggedRes, overviewRes]) => {
         setJobs(jobsRes.items)
         setFlagged(flaggedRes.items)
+        setOverview(overviewRes)
       })
       .catch((err) => setError(errorDetail(err, 'Failed to load analysis data')))
       .finally(() => setLoading(false))
@@ -50,6 +62,23 @@ export default function AdminAnalysis() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      if (typeof syncAnalysisJobs === 'function') {
+        const result = await syncAnalysisJobs(session, { run: true, force: false })
+        notifications.success(
+          `Queued ${result.created} new job(s), reset ${result.reset}, skipped ${result.skipped}`,
+        )
+      }
+      loadData()
+    } catch (err) {
+      notifications.error(errorDetail(err, 'Failed to queue missing analysis jobs'))
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const handleRetry = async (jobId: string) => {
     setRetryingId(jobId)
@@ -148,6 +177,54 @@ export default function AdminAnalysis() {
         title="Automated PYQ Analysis"
         description="Monitor automated background processing of question papers, review model confidence, and calibrate uncertain mappings."
       />
+
+      {overview && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem' }}>
+            {[
+              { label: 'Indexed papers', value: overview.total_documents },
+              { label: 'Never queued', value: overview.documents_without_jobs, warn: overview.documents_without_jobs > 0 },
+              { label: 'Questions extracted', value: overview.extracted_questions },
+              { label: 'Questions classified', value: overview.classified_questions },
+              { label: 'Failed jobs', value: overview.failed_jobs, warn: overview.failed_jobs > 0 },
+              { label: 'Flagged jobs', value: overview.flagged_jobs, warn: overview.flagged_jobs > 0 },
+            ].map((card) => (
+              <div key={card.label} className="admin-content-card" style={{ padding: '0.9rem 1rem' }}>
+                <div style={{ color: '#94a3b8', fontSize: '0.78rem' }}>{card.label}</div>
+                <div style={{ color: card.warn ? '#f59e0b' : '#f8fafc', fontSize: '1.45rem', fontWeight: 700 }}>{card.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {overview.documents_without_jobs > 0 && (
+            <div style={{ backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '8px', padding: '0.85rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+              <div style={{ color: '#fde68a', fontSize: '0.88rem' }}>
+                <strong>{overview.documents_without_jobs} indexed paper(s) have no analysis job.</strong>{' '}
+                These papers were uploaded before automatic processing was enabled.
+              </div>
+              <button type="button" onClick={handleSync} disabled={syncing} className="content-btn is-primary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.82rem' }}>
+                {syncing ? 'Queueing...' : 'Analyse Missing Papers'}
+              </button>
+            </div>
+          )}
+
+          {overview.papers.filter((paper) => paper.job_status === 'NOT_QUEUED').length > 0 && (
+            <div className="admin-content-card" style={{ padding: '0.9rem 1rem' }}>
+              <div style={{ color: '#cbd5e1', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>Not queued</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                {overview.papers
+                  .filter((paper) => paper.job_status === 'NOT_QUEUED')
+                  .map((paper) => (
+                    <div key={paper.paper_id} style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+                      {paper.subject_code ? `[${paper.subject_code}] ` : ''}
+                      {paper.title} - {paper.question_count} stored questions
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', paddingBottom: '0.75rem' }}>
         <button

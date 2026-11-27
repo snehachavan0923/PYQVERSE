@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event'
 
 const mocks = vi.hoisted(() => ({
   listAnalysisJobs: vi.fn(),
+  getAnalysisOverview: vi.fn(),
+  syncAnalysisJobs: vi.fn(),
   listFlaggedQuestions: vi.fn(),
   retryAnalysisJob: vi.fn(),
   correctQuestion: vi.fn(),
@@ -15,6 +17,8 @@ vi.mock('../context/AuthContext', () => ({
 
 vi.mock('../services/analysisApi', () => ({
   listAnalysisJobs: mocks.listAnalysisJobs,
+  getAnalysisOverview: mocks.getAnalysisOverview,
+  syncAnalysisJobs: mocks.syncAnalysisJobs,
   listFlaggedQuestions: mocks.listFlaggedQuestions,
   retryAnalysisJob: mocks.retryAnalysisJob,
   correctQuestion: mocks.correctQuestion,
@@ -32,6 +36,20 @@ import AdminAnalysis from '../pages/AdminAnalysis'
 describe('AdminAnalysis Page', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.getAnalysisOverview.mockResolvedValue({
+      total_documents: 1,
+      pending_jobs: 0,
+      processing_jobs: 0,
+      completed_jobs: 1,
+      failed_jobs: 0,
+      flagged_jobs: 0,
+      documents_without_jobs: 0,
+      extracted_questions: 12,
+      classified_questions: 12,
+      flagged_questions: 0,
+      papers: [],
+      ai_provider: { provider: 'rule_keyword', configured: false, model: null, deterministic: true, notes: [] },
+    })
   })
 
   it('renders analysis jobs and switches tabs to flagged questions', async () => {
