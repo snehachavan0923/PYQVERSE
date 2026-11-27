@@ -4,6 +4,7 @@ import DashboardLayout from '../layouts/DashboardLayout'
 import ProtectedRoute from '../components/ProtectedRoute'
 import Login from '../pages/Login'
 import Register from '../pages/Register'
+import Home from '../pages/Home'
 import ForgotPassword from '../pages/ForgotPassword'
 import ResetPassword from '../pages/ResetPassword'
 import Onboarding from '../pages/Onboarding'
@@ -25,24 +26,36 @@ import AdminUploads from '../pages/AdminUploads'
 import AdminAnalysis from '../pages/AdminAnalysis'
 import StudentPyqInsights from '../pages/StudentPyqInsights'
 import { useAuth } from '../context/AuthContext'
+import type { ReactNode } from 'react'
 import { ErrorState } from '../components/PageState'
+
+function destinationFor(session: { profile: { role: string; onboarding_completed: boolean } }) {
+  if (session.profile.role === 'ADMIN_FACULTY') return '/admin'
+  return session.profile.onboarding_completed ? '/student' : '/onboarding'
+}
 
 function RootRedirect() {
   const { session, loading, restoreError, retryRestore } = useAuth()
   if (loading) return <div className="pyq-loading">Loading...</div>
   if (restoreError) return <ErrorState message={restoreError} onRetry={retryRestore} />
-  if (!session) return <Navigate to="/login" replace />
-  if (session.profile.role === 'ADMIN_FACULTY') return <Navigate to="/admin" replace />
-  return <Navigate to={session.profile.onboarding_completed ? '/student' : '/onboarding'} replace />
+  if (session) return <Navigate to={destinationFor(session)} replace />
+  return <Home />
+}
+
+function GuestRoute({ children }: { children: ReactNode }) {
+  const { session, loading } = useAuth()
+  if (loading) return <div className="pyq-loading">Loading...</div>
+  if (session) return <Navigate to={destinationFor(session)} replace />
+  return <>{children}</>
 }
 
 export default function AppRoutes() {
   return (
     <Routes>
+      <Route path="/" element={<RootRedirect />} />
       <Route element={<MainLayout />}>
-        <Route path="/" element={<RootRedirect />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/login" element={<GuestRoute><Login /></GuestRoute>} />
+        <Route path="/register" element={<GuestRoute><Register /></GuestRoute>} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route element={<ProtectedRoute role="STUDENT" />}>
