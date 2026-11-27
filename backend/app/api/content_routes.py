@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,8 +20,9 @@ from app.models.academic import (
     Subject,
 )
 from app.models.document import ExamType, PermissionStatus, QuestionPaper, UploadedDocument
+from app.models.question import DocumentPage, Question, QuestionOccurrence
 from app.models.resource import LearningResource, ResourceType
-from app.models.syllabus import SyllabusDocument, SyllabusVersion, VerificationStatus
+from app.models.syllabus import SyllabusDocument, SyllabusVersion, Unit, VerificationStatus
 from app.models.user import User
 from app.schemas.content import PyqUpdate, ResourceUpdate, SyllabusUpdate
 from app.services import storage
@@ -33,6 +35,7 @@ from app.services.content import (
 )
 
 router = APIRouter(tags=["content"])
+logger = logging.getLogger(__name__)
 
 VALID_STATUSES = {status.value for status in VerificationStatus}
 RESOURCE_TYPES = {item.value for item in ResourceType}
@@ -69,6 +72,204 @@ def _cleanup(path: str | None) -> None:
     except Exception:
         # Best-effort cleanup; failed uploads must not break the request path.
         pass
+
+
+def _is_storage_path_shared(
+    db: Session,
+    storage_path: str,
+    *,
+    exclude_upload_doc_id: uuid.UUID | None = None,
+    exclude_syllabus_doc_id: uuid.UUID | None = None,
+    exclude_resource_id: uuid.UUID | None = None,
+) -> bool:
+    """Check if another document or resource record shares this storage path."""
+    if not storage_path:
+        return False
+
+    # Check UploadedDocument
+    up_stmt = select(func.count(UploadedDocument.id)).where(UploadedDocument.storage_path == storage_path)
+    if exclude_upload_doc_id is not None:
+        up_stmt = up_stmt.where(UploadedDocument.id != exclude_upload_doc_id)
+    if (db.scalar(up_stmt) or 0) > 0:
+        return True
+
+    # Check SyllabusDocument
+    syl_stmt = select(func.count(SyllabusDocument.id)).where(SyllabusDocument.storage_path == storage_path)
+    if exclude_syllabus_doc_id is not None:
+        syl_stmt = syl_stmt.where(SyllabusDocument.id != exclude_syllabus_doc_id)
+    if (db.scalar(syl_stmt) or 0) > 0:
+        return True
+
+    # Check LearningResource
+    res_stmt = select(func.count(LearningResource.id)).where(LearningResource.storage_path == storage_path)
+    if exclude_resource_id is not None:
+        res_stmt = res_stmt.where(LearningResource.id != exclude_resource_id)
+    if (db.scalar(res_stmt) or 0) > 0:
+        return True
+
+    return False
+
+
+def _delete_storage_safely(storage_path: str | None) -> bool:
+    """Remove storage file, handling missing files or transient storage errors safely."""
+    if not storage_path:
+        return True
+    try:
+        storage.delete_object(storage_path)
+        return True
+    except Exception as exc:
+        logger.warning("Storage file %s deletion error (handled safely): %s", storage_path, exc)
+        return False
+
+
+def _delete_pyq_core(db: Session, paper_id: uuid.UUID) -> dict:
+    paper = db.get(QuestionPaper, paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="Question paper not found")
+
+    document = db.get(UploadedDocument, paper.uploaded_document_id)
+    storage_path = None
+    is_shared = False
+
+    if document is not None:
+        # Check for dependent Question records
+        q_count = db.scalar(
+            select(func.count(Question.id)).where(Question.document_id == document.id)
+        ) or 0
+        if q_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot delete question paper: {q_count} extracted question(s) depend on this document. Remove or reassign them first.",
+            )
+
+        # Check for dependent QuestionOccurrence records
+        occ_count = db.scalar(
+            select(func.count(QuestionOccurrence.id)).where(QuestionOccurrence.document_id == document.id)
+        ) or 0
+        if occ_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot delete question paper: {occ_count} question occurrence reference(s) depend on this document.",
+            )
+
+        # Remove cached document pages (belong only to this document)
+        pages = db.scalars(select(DocumentPage).where(DocumentPage.document_id == document.id)).all()
+        for p in pages:
+            db.delete(p)
+
+        storage_path = document.storage_path
+        is_shared = _is_storage_path_shared(db, storage_path, exclude_upload_doc_id=document.id)
+
+    db.delete(paper)
+    if document is not None:
+        db.delete(document)
+    db.commit()
+
+    if storage_path and not is_shared:
+        _delete_storage_safely(storage_path)
+
+    return {"message": "Question paper deleted successfully", "id": str(paper_id)}
+
+
+def _delete_syllabus_core(db: Session, document_id: uuid.UUID) -> dict:
+    document = db.get(SyllabusDocument, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Syllabus document not found")
+
+    version = db.get(SyllabusVersion, document.syllabus_version_id)
+    other_docs_count = db.scalar(
+        select(func.count(SyllabusDocument.id)).where(
+            SyllabusDocument.syllabus_version_id == document.syllabus_version_id,
+            SyllabusDocument.id != document.id,
+        )
+    ) or 0
+
+    delete_version = False
+    if other_docs_count == 0 and version is not None:
+        unit_count = db.scalar(
+            select(func.count(Unit.id)).where(Unit.syllabus_version_id == version.id)
+        ) or 0
+        if unit_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot delete syllabus document: {unit_count} syllabus unit(s) are mapped to this version. Remove or reassign units first.",
+            )
+        delete_version = True
+
+    storage_path = document.storage_path
+    is_shared = _is_storage_path_shared(db, storage_path, exclude_syllabus_doc_id=document.id)
+
+    db.delete(document)
+    if delete_version and version is not None:
+        db.delete(version)
+    db.commit()
+
+    if storage_path and not is_shared:
+        _delete_storage_safely(storage_path)
+
+    return {"message": "Syllabus document deleted successfully", "id": str(document_id)}
+
+
+def _delete_resource_core(db: Session, resource_id: uuid.UUID) -> dict:
+    resource = db.get(LearningResource, resource_id)
+    if resource is None:
+        raise HTTPException(status_code=404, detail="Learning resource not found")
+
+    storage_path = resource.storage_path
+    is_shared = _is_storage_path_shared(db, storage_path, exclude_resource_id=resource.id)
+
+    db.delete(resource)
+    db.commit()
+
+    if storage_path and not is_shared:
+        _delete_storage_safely(storage_path)
+
+    return {"message": "Learning resource deleted successfully", "id": str(resource_id)}
+
+
+def _delete_document_core(db: Session, document_id: uuid.UUID) -> dict:
+    document = db.get(UploadedDocument, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    paper = db.scalars(
+        select(QuestionPaper).where(QuestionPaper.uploaded_document_id == document.id)
+    ).first()
+    if paper is not None:
+        return _delete_pyq_core(db, paper.id)
+
+    q_count = db.scalar(
+        select(func.count(Question.id)).where(Question.document_id == document.id)
+    ) or 0
+    if q_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete document: {q_count} extracted question(s) depend on it. Remove them first.",
+        )
+
+    occ_count = db.scalar(
+        select(func.count(QuestionOccurrence.id)).where(QuestionOccurrence.document_id == document.id)
+    ) or 0
+    if occ_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete document: {occ_count} question occurrence reference(s) depend on it.",
+        )
+
+    pages = db.scalars(select(DocumentPage).where(DocumentPage.document_id == document.id)).all()
+    for p in pages:
+        db.delete(p)
+
+    storage_path = document.storage_path
+    is_shared = _is_storage_path_shared(db, storage_path, exclude_upload_doc_id=document.id)
+
+    db.delete(document)
+    db.commit()
+
+    if storage_path and not is_shared:
+        _delete_storage_safely(storage_path)
+
+    return {"message": "Document deleted successfully", "id": str(document_id)}
 
 
 def _subject_context(db: Session, subject: Subject) -> tuple[AcademicScheme, Semester]:
@@ -331,7 +532,6 @@ def admin_update_syllabus(
     return _syllabus_payload(version, document, subject)
 
 
-@router.delete("/api/v1/admin/syllabus/{document_id}")
 def admin_archive_syllabus(
     document_id: uuid.UUID, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ):
@@ -344,6 +544,27 @@ def admin_archive_syllabus(
         version.active = False
     db.commit()
     return {"message": "Syllabus document archived"}
+
+
+@router.delete("/api/v1/admin/syllabus/{document_id}")
+def admin_archive_or_delete_syllabus(
+    document_id: uuid.UUID,
+    permanent: bool = False,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if permanent:
+        return _delete_syllabus_core(db, document_id)
+    return admin_archive_syllabus(document_id, admin, db)
+
+
+@router.delete("/api/v1/admin/syllabus/{document_id}/permanent")
+def admin_delete_syllabus(
+    document_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return _delete_syllabus_core(db, document_id)
 
 
 # ----------------------------------------------------------------- admin PYQs
@@ -564,7 +785,6 @@ def admin_update_pyq(
     return _pyq_payload(paper, document, db.get(Subject, paper.subject_id))
 
 
-@router.delete("/api/v1/admin/pyqs/{paper_id}")
 def admin_archive_pyq(
     paper_id: uuid.UUID, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ):
@@ -576,6 +796,27 @@ def admin_archive_pyq(
         document.active = False
     db.commit()
     return {"message": "Question paper archived"}
+
+
+@router.delete("/api/v1/admin/pyqs/{paper_id}")
+def admin_archive_or_delete_pyq(
+    paper_id: uuid.UUID,
+    permanent: bool = False,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if permanent:
+        return _delete_pyq_core(db, paper_id)
+    return admin_archive_pyq(paper_id, admin, db)
+
+
+@router.delete("/api/v1/admin/pyqs/{paper_id}/permanent")
+def admin_delete_pyq(
+    paper_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return _delete_pyq_core(db, paper_id)
 
 
 # ------------------------------------------------------------ admin resources
@@ -695,7 +936,6 @@ def admin_update_resource(
     return _resource_payload(resource, db.get(Subject, resource.subject_id))
 
 
-@router.delete("/api/v1/admin/resources/{resource_id}")
 def admin_archive_resource(
     resource_id: uuid.UUID, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ):
@@ -705,6 +945,55 @@ def admin_archive_resource(
     resource.active = False
     db.commit()
     return {"message": "Learning resource archived"}
+
+
+@router.delete("/api/v1/admin/resources/{resource_id}")
+def admin_archive_or_delete_resource(
+    resource_id: uuid.UUID,
+    permanent: bool = False,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if permanent:
+        return _delete_resource_core(db, resource_id)
+    return admin_archive_resource(resource_id, admin, db)
+
+
+@router.delete("/api/v1/admin/resources/{resource_id}/permanent")
+def admin_delete_resource(
+    resource_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return _delete_resource_core(db, resource_id)
+
+
+@router.delete("/api/v1/admin/documents/{document_id}")
+def admin_delete_uploaded_document(
+    document_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return _delete_document_core(db, document_id)
+
+
+@router.delete("/api/v1/admin/content/{kind}/{content_id}")
+def admin_delete_content(
+    kind: str,
+    content_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    k = kind.lower().strip()
+    if k in ("pyq", "pyqs"):
+        return _delete_pyq_core(db, content_id)
+    if k in ("syllabus", "syllabi"):
+        return _delete_syllabus_core(db, content_id)
+    if k in ("resource", "resources"):
+        return _delete_resource_core(db, content_id)
+    if k in ("document", "documents"):
+        return _delete_document_core(db, content_id)
+    raise HTTPException(status_code=400, detail=f"Unsupported content kind: {kind}")
 
 
 # --------------------------------------------------------------- uploads hub
