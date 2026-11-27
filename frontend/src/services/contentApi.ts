@@ -86,7 +86,11 @@ export async function openStudentPreview(
 export interface AdminUploadPayload {
   subject_id: string
   status: string
-  file: File
+  file?: File | null
+  resource_source?: 'FILE' | 'LINK' | 'BOTH'
+  external_url?: string
+  link_title?: string
+  unit_id?: string
   version?: string
   title?: string
   description?: string
@@ -102,9 +106,13 @@ export async function uploadAdminContent(
   payload: AdminUploadPayload,
 ) {
   const form = new FormData()
-  form.set('file', payload.file)
+  if (payload.file) form.set('file', payload.file)
   form.set('subject_id', payload.subject_id)
   form.set('status', payload.status)
+  if (payload.resource_source) form.set('resource_source', payload.resource_source)
+  if (payload.external_url) form.set('external_url', payload.external_url)
+  if (payload.link_title) form.set('link_title', payload.link_title)
+  if (payload.unit_id) form.set('unit_id', payload.unit_id)
   if (payload.version) form.set('version', payload.version)
   if (payload.title) form.set('title', payload.title)
   if (payload.description) form.set('description', payload.description)
@@ -114,6 +122,19 @@ export async function uploadAdminContent(
   if (payload.resource_type) form.set('resource_type', payload.resource_type)
   const endpoint = kind === 'pyq' ? 'pyqs' : kind === 'syllabus' ? 'syllabus' : 'resources'
   return uploadWithAuth<Record<string, unknown>>(`/admin/${endpoint}`, session, form)
+}
+
+export interface AdminUnitItem {
+  id: string
+  title: string
+  order_index: number
+}
+
+export async function listAdminUnits(
+  session: AuthSession | null,
+  subjectId: string,
+): Promise<AdminUnitItem[]> {
+  return getWithAuth<AdminUnitItem[]>(`/admin/subjects/${subjectId}/units`, session)
 }
 
 export async function listAdminContent<T = unknown>(
@@ -142,6 +163,15 @@ export async function archiveAdminContent(
 ) {
   const endpoint = kind === 'pyq' ? 'pyqs' : kind === 'syllabus' ? 'syllabus' : 'resources'
   return deleteWithAuth<{ message: string }>(`/admin/${endpoint}/${id}`, session)
+}
+
+export async function deleteAdminContent(
+  session: AuthSession | null,
+  kind: ContentKind | 'document',
+  id: string,
+) {
+  const endpoint = kind === 'pyq' ? 'pyqs' : kind === 'syllabus' ? 'syllabus' : kind === 'resource' ? 'resources' : 'documents'
+  return deleteWithAuth<{ message: string }>(`/admin/${endpoint}/${id}?permanent=true`, session)
 }
 
 export async function openAdminDownload(

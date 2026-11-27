@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   listAdminContent: vi.fn(),
   updateAdminContent: vi.fn(),
   archiveAdminContent: vi.fn(),
+  deleteAdminContent: vi.fn(),
   uploadAdminContent: vi.fn(),
   openAdminPreview: vi.fn(),
   openAdminDownload: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('../services/contentApi', () => ({
   listAdminContent: mocks.listAdminContent,
   updateAdminContent: mocks.updateAdminContent,
   archiveAdminContent: mocks.archiveAdminContent,
+  deleteAdminContent: mocks.deleteAdminContent,
   uploadAdminContent: mocks.uploadAdminContent,
   openAdminPreview: mocks.openAdminPreview,
   openAdminDownload: mocks.openAdminDownload,
@@ -77,6 +79,7 @@ beforeEach(() => {
   mocks.listAdminContent.mockResolvedValue({ items: [draft, archived], total: 2 })
   mocks.updateAdminContent.mockResolvedValue({})
   mocks.archiveAdminContent.mockResolvedValue({ message: 'archived' })
+  mocks.deleteAdminContent.mockResolvedValue({ message: 'deleted' })
   mocks.uploadAdminContent.mockResolvedValue({})
   mocks.confirm.mockResolvedValue(true)
   mocks.retryError.mockResolvedValue(false)
@@ -320,5 +323,81 @@ describe('AdminContentManager lifecycle states', () => {
     dialog = await openUploadDialog(user)
     expect(within(dialog).getByLabelText('Title (optional)')).toHaveValue('')
     expect(within(dialog).getByLabelText('File')).toHaveValue('')
+  })
+
+  it('renders a delete button for content items', async () => {
+    render(<AdminContentManager kind="pyq" />)
+    await screen.findByText('Draft paper')
+
+    const deleteButtons = screen.getAllByRole('button', { name: /Delete/ })
+    expect(deleteButtons.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('cancels deletion when Cancel button is clicked in confirmation dialog', async () => {
+    const user = userEvent.setup()
+    render(<AdminContentManager kind="pyq" />)
+    await screen.findByText('Draft paper')
+
+    const deleteBtn = screen.getByRole('button', { name: 'Delete Draft paper' })
+    await user.click(deleteBtn)
+
+    const modal = await screen.findByRole('dialog')
+    expect(within(modal).getByText('Confirm Permanent Deletion')).toBeInTheDocument()
+    expect(within(modal).getByText('Draft paper')).toBeInTheDocument()
+    expect(within(modal).getByText(/Previous Year Question Paper/)).toBeInTheDocument()
+    expect(within(modal).getByText(/Warning:/)).toBeInTheDocument()
+
+    const cancelBtn = within(modal).getByRole('button', { name: 'Cancel' })
+    await user.click(cancelBtn)
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+    expect(mocks.deleteAdminContent).not.toHaveBeenCalled()
+    expect(screen.getByText('Draft paper')).toBeInTheDocument()
+  })
+
+  it('deletes content item when Confirm Delete is clicked', async () => {
+    const user = userEvent.setup()
+    render(<AdminContentManager kind="pyq" />)
+    await screen.findByText('Draft paper')
+
+    const deleteBtn = screen.getByRole('button', { name: 'Delete Draft paper' })
+    await user.click(deleteBtn)
+
+    const modal = await screen.findByRole('dialog')
+    const confirmBtn = within(modal).getByRole('button', { name: 'Confirm Delete' })
+    await user.click(confirmBtn)
+
+    await waitFor(() => {
+      expect(mocks.deleteAdminContent).toHaveBeenCalledWith(session, 'pyq', 'draft-1')
+      expect(mocks.toast).toHaveBeenCalledWith('success', 'Content deleted successfully')
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('Draft paper')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows error notification when deleteAdminContent rejects', async () => {
+    mocks.deleteAdminContent.mockRejectedValueOnce({
+      response: { data: { detail: 'Cannot delete question paper: extracted questions depend on it.' } },
+    })
+    const user = userEvent.setup()
+    render(<AdminContentManager kind="pyq" />)
+    await screen.findByText('Draft paper')
+
+    const deleteBtn = screen.getByRole('button', { name: 'Delete Draft paper' })
+    await user.click(deleteBtn)
+
+    const modal = await screen.findByRole('dialog')
+    const confirmBtn = within(modal).getByRole('button', { name: 'Confirm Delete' })
+    await user.click(confirmBtn)
+
+    await waitFor(() => {
+      expect(mocks.error).toHaveBeenCalledWith(
+        'Deletion failed',
+        'Cannot delete question paper: extracted questions depend on it.',
+      )
+    })
   })
 })

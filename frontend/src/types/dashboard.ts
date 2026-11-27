@@ -65,13 +65,20 @@ export interface ContentItem {
   subject_id: string
   subject_code: string | null
   subject_name: string | null
-  original_filename: string
-  file_type: string
+  original_filename?: string | null
+  storage_path?: string | null
+  file_type?: string | null
   file_size?: number | null
   title?: string | null
   description?: string | null
   verification_status: string
   active?: boolean
+  resource_source?: 'FILE' | 'LINK' | 'BOTH'
+  external_url?: string | null
+  link_title?: string | null
+  unit_id?: string | null
+  unit_number?: number | null
+  unit_title?: string | null
 }
 
 export interface SyllabusDocumentItem extends ContentItem {
@@ -95,6 +102,12 @@ export interface LearningResourceItem extends ContentItem {
   title: string
   description: string | null
   resource_type: string
+  resource_source?: 'FILE' | 'LINK' | 'BOTH'
+  external_url?: string | null
+  link_title?: string | null
+  unit_id?: string | null
+  unit_number?: number | null
+  unit_title?: string | null
   uploaded_at?: string | null
 }
 

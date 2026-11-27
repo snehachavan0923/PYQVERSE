@@ -161,4 +161,170 @@ describe('Login flow', () => {
 
     expect(await screen.findByText('Student onboarding route')).toBeInTheDocument()
   })
+
+  describe('Email OTP flow', () => {
+    it('switches between Password and Email OTP tabs', async () => {
+      const user = userEvent.setup()
+      renderLogin()
+
+      expect(screen.getByRole('tab', { name: 'Password Login' })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByLabelText('Password')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('tab', { name: 'Email OTP' }))
+
+      expect(screen.getByRole('tab', { name: 'Email OTP' })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByLabelText('Registered College Email')).toBeInTheDocument()
+      expect(screen.queryByLabelText('Password')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('tab', { name: 'Password Login' }))
+      expect(screen.getByLabelText('Password')).toBeInTheDocument()
+    })
+
+    it('requests an OTP and transitions to the 6-digit verification view', async () => {
+      mocks.post.mockResolvedValue({
+        data: { message: 'Verification code sent', email: 's*****@rvce.edu.in' },
+      })
+      const user = userEvent.setup()
+      renderLogin()
+
+      await user.click(screen.getByRole('tab', { name: 'Email OTP' }))
+      await user.type(screen.getByLabelText('Registered College Email'), 'student@rvce.edu.in')
+      await user.click(screen.getByRole('button', { name: 'Send Verification Code' }))
+
+      expect(mocks.post).toHaveBeenCalledWith(
+        '/auth/otp/request',
+        { email: 'student@rvce.edu.in' },
+        { timeout: 20_000 },
+      )
+
+      expect(await screen.findByText('s*****@rvce.edu.in')).toBeInTheDocument()
+      expect(screen.getByText('Check your email')).toBeInTheDocument()
+      expect(
+        screen.getByText(/Check your inbox\. If you don't see it, check your Spam or Junk folder\./),
+      ).toBeInTheDocument()
+      expect(screen.getByRole('group', { name: '6-digit verification code' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Verify Code' })).toBeDisabled()
+    })
+
+    it('allows typing digits and auto-progressing through inputs', async () => {
+      mocks.post.mockResolvedValueOnce({
+        data: { message: 'Verification code sent', email: 's*****@rvce.edu.in' },
+      })
+      const user = userEvent.setup()
+      renderLogin()
+
+      await user.click(screen.getByRole('tab', { name: 'Email OTP' }))
+      await user.type(screen.getByLabelText('Registered College Email'), 'student@rvce.edu.in')
+      await user.click(screen.getByRole('button', { name: 'Send Verification Code' }))
+
+      await screen.findByText('s*****@rvce.edu.in')
+
+      const digit1 = screen.getByLabelText('Digit 1 of 6')
+      const digit2 = screen.getByLabelText('Digit 2 of 6')
+      const digit3 = screen.getByLabelText('Digit 3 of 6')
+      const digit4 = screen.getByLabelText('Digit 4 of 6')
+      const digit5 = screen.getByLabelText('Digit 5 of 6')
+      const digit6 = screen.getByLabelText('Digit 6 of 6')
+
+      await user.type(digit1, '1')
+      expect(digit2).toHaveFocus()
+
+      await user.type(digit2, '2')
+      expect(digit3).toHaveFocus()
+
+      await user.type(digit3, '3')
+      await user.type(digit4, '4')
+      await user.type(digit5, '5')
+      await user.type(digit6, '6')
+
+      expect(screen.getByRole('button', { name: 'Verify Code' })).toBeEnabled()
+    })
+
+    it('supports pasting a complete 6-digit OTP', async () => {
+      mocks.post.mockResolvedValueOnce({
+        data: { message: 'Verification code sent', email: 's*****@rvce.edu.in' },
+      })
+      mocks.post.mockResolvedValueOnce({ data: studentSession })
+      const user = userEvent.setup()
+      renderLogin()
+
+      await user.click(screen.getByRole('tab', { name: 'Email OTP' }))
+      await user.type(screen.getByLabelText('Registered College Email'), 'student@rvce.edu.in')
+      await user.click(screen.getByRole('button', { name: 'Send Verification Code' }))
+
+      await screen.findByText('s*****@rvce.edu.in')
+
+      const digit1 = screen.getByLabelText('Digit 1 of 6')
+      fireEvent.paste(digit1, {
+        clipboardData: { getData: () => '123456' },
+      })
+
+      expect(screen.getByLabelText('Digit 1 of 6')).toHaveValue('1')
+      expect(screen.getByLabelText('Digit 2 of 6')).toHaveValue('2')
+      expect(screen.getByLabelText('Digit 3 of 6')).toHaveValue('3')
+      expect(screen.getByLabelText('Digit 4 of 6')).toHaveValue('4')
+      expect(screen.getByLabelText('Digit 5 of 6')).toHaveValue('5')
+      expect(screen.getByLabelText('Digit 6 of 6')).toHaveValue('6')
+
+      const verifyBtn = screen.getByRole('button', { name: 'Verify Code' })
+      expect(verifyBtn).toBeEnabled()
+
+      await user.click(verifyBtn)
+
+      expect(mocks.post).toHaveBeenLastCalledWith(
+        '/auth/otp/verify',
+        { email: 'student@rvce.edu.in', token: '123456' },
+        { timeout: 20_000 },
+      )
+      expect(await screen.findByText('Student dashboard route')).toBeInTheDocument()
+      expect(mocks.setSession).toHaveBeenCalledWith(studentSession)
+    })
+
+    it('shows error when OTP verification fails', async () => {
+      mocks.post.mockResolvedValueOnce({
+        data: { message: 'Verification code sent', email: 's*****@rvce.edu.in' },
+      })
+      mocks.post.mockRejectedValueOnce({
+        response: { status: 401, data: { detail: 'Invalid or expired verification code' } },
+      })
+      const user = userEvent.setup()
+      renderLogin()
+
+      await user.click(screen.getByRole('tab', { name: 'Email OTP' }))
+      await user.type(screen.getByLabelText('Registered College Email'), 'student@rvce.edu.in')
+      await user.click(screen.getByRole('button', { name: 'Send Verification Code' }))
+
+      await screen.findByText('s*****@rvce.edu.in')
+
+      const digit1 = screen.getByLabelText('Digit 1 of 6')
+      fireEvent.paste(digit1, { clipboardData: { getData: () => '000000' } })
+
+      await user.click(screen.getByRole('button', { name: 'Verify Code' }))
+
+      await waitFor(() => {
+        expect(mocks.error).toHaveBeenCalledWith('Verification failed', 'Invalid or expired verification code')
+      })
+      expect(screen.getByRole('alert')).toHaveTextContent('Invalid or expired verification code')
+      expect(screen.getByRole('button', { name: 'Verify Code' })).toBeEnabled()
+    })
+
+    it('allows changing email with back button', async () => {
+      mocks.post.mockResolvedValueOnce({
+        data: { message: 'Verification code sent', email: 's*****@rvce.edu.in' },
+      })
+      const user = userEvent.setup()
+      renderLogin()
+
+      await user.click(screen.getByRole('tab', { name: 'Email OTP' }))
+      await user.type(screen.getByLabelText('Registered College Email'), 'student@rvce.edu.in')
+      await user.click(screen.getByRole('button', { name: 'Send Verification Code' }))
+
+      await screen.findByText('s*****@rvce.edu.in')
+
+      await user.click(screen.getByRole('button', { name: '← Change email' }))
+
+      expect(screen.getByLabelText('Registered College Email')).toBeInTheDocument()
+      expect(screen.queryByText('s*****@rvce.edu.in')).not.toBeInTheDocument()
+    })
+  })
 })

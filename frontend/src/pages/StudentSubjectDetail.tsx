@@ -21,6 +21,7 @@ import {
   openPreviewWindow,
   triggerDownload,
 } from '../utils/documentActions'
+import { detectResourceSource, parseYouTubeUrl } from '../utils/resourceUtils'
 
 type Tab = 'overview' | 'syllabus' | 'pyqs' | 'resources'
 
@@ -169,17 +170,17 @@ export default function StudentSubjectDetail() {
                     <strong>{document.original_filename}</strong>
                     <div className="content-meta">
                       <span>Version {document.version}</span>
-                      <span>{document.file_type.toUpperCase()}</span>
+                      <span>{(document.file_type || '').toUpperCase()}</span>
                       {statusTag(document.verification_status)}
                     </div>
                   </div>
                   <div className="content-item-side">
                     <ContentActions
                       withLabels
-                      label={document.original_filename}
+                      label={document.original_filename || 'Syllabus'}
                       busy={busy?.id === document.id}
-                      viewDisabled={!isPdfFile(document.file_type)}
-                      viewHint={isPdfFile(document.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                      viewDisabled={!isPdfFile(document.file_type || '')}
+                      viewHint={isPdfFile(document.file_type || '') ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
                       onView={() => void view('syllabus', document.id)}
                       onDownload={() => void download('syllabus', document.id)}
                     />
@@ -212,7 +213,7 @@ export default function StudentSubjectDetail() {
                   <div className="content-item-side">
                     <ContentActions
                       withLabels
-                      label={paper.title || paper.original_filename}
+                      label={paper.title || paper.original_filename || 'Question Paper'}
                       busy={busy?.id === paper.id}
                       onView={() => void view('pyq', paper.id)}
                       onDownload={() => void download('pyq', paper.id)}
@@ -231,30 +232,79 @@ export default function StudentSubjectDetail() {
         <div role="tabpanel" id="panel-resources" aria-labelledby="tab-resources" tabIndex={0}>
           {detail.resources.length ? (
             <div className="content-list">
-              {detail.resources.map((resource) => (
-                <article className="content-item" key={resource.id}>
-                  <div className="content-item-main">
-                    <strong>{resource.title}</strong>
-                    <p>{resource.description || 'No description provided.'}</p>
-                    <div className="content-meta">
-                      <span>{resource.resource_type.replaceAll('_', ' ')}</span>
-                      <span>{resource.file_type.toUpperCase()}</span>
-                      {statusTag(resource.verification_status)}
+              {detail.resources.map((resource) => {
+                const source = detectResourceSource(resource)
+                const hasFile = source === 'FILE' || source === 'BOTH' || Boolean(resource.file_size)
+                const yt = resource.external_url ? parseYouTubeUrl(resource.external_url) : null
+
+                return (
+                  <article className="content-item" key={resource.id}>
+                    {yt?.thumbnailUrl && (
+                      <div className="resource-card-thumb">
+                        <img src={yt.thumbnailUrl} alt="Video thumbnail" />
+                        <div className="resource-play-overlay">
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <polygon points="5 3 19 12 5 21 5 3" />
+                          </svg>
+                        </div>
+                      </div>
+                    )}
+                    <div className="content-item-main">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <strong>{resource.title}</strong>
+                        <span className={`tag tag-source-${source.toLowerCase()}`}>
+                          {source === 'FILE' ? '📄 File' : source === 'LINK' ? '🔗 Link' : '📄+🔗 File & Link'}
+                        </span>
+                      </div>
+                      <p>{resource.description || 'No description provided.'}</p>
+                      {resource.external_url && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', marginTop: '2px' }}>
+                          <span style={{ color: 'var(--muted)' }}>URL:</span>
+                          <a
+                            href={resource.external_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: 'var(--primary)', textDecoration: 'underline', overflowWrap: 'anywhere' }}
+                          >
+                            {resource.link_title || resource.external_url}
+                          </a>
+                        </div>
+                      )}
+                      <div className="content-meta">
+                        <span>{resource.resource_type.replaceAll('_', ' ')}</span>
+                        {resource.unit_title && <span>Unit {resource.unit_number ?? ''}: {resource.unit_title}</span>}
+                        {hasFile && resource.file_type && <span>{resource.file_type.toUpperCase()}</span>}
+                        {statusTag(resource.verification_status)}
+                      </div>
                     </div>
-                  </div>
-                  <div className="content-item-side">
-                    <ContentActions
-                      withLabels
-                      label={resource.title}
-                      busy={busy?.id === resource.id}
-                      viewDisabled={!isPdfFile(resource.file_type)}
-                      viewHint={isPdfFile(resource.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
-                      onView={() => void view('resource', resource.id)}
-                      onDownload={() => void download('resource', resource.id)}
-                    />
-                  </div>
-                </article>
-              ))}
+                    <div className="content-item-side">
+                      <div className="row-actions">
+                        {resource.external_url && (
+                          <a
+                            className="secondary-button compact-button resource-link-btn"
+                            href={resource.external_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {yt?.isYouTube ? '▶ Watch Video' : '↗ Open Resource'}
+                          </a>
+                        )}
+                        {hasFile && (
+                          <ContentActions
+                            withLabels
+                            label={resource.title}
+                            busy={busy?.id === resource.id}
+                            viewDisabled={!isPdfFile(resource.file_type || '')}
+                            viewHint={isPdfFile(resource.file_type || '') ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                            onView={() => void view('resource', resource.id)}
+                            onDownload={() => void download('resource', resource.id)}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                )
+              })}
             </div>
           ) : (
             <EmptyState title="No learning resources" description="No published learning resources exist for this subject yet." />

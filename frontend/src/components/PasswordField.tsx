@@ -5,6 +5,7 @@ interface PasswordFieldProps {
   value: string
   onChange: (value: string) => void
   autoComplete: string
+  name?: string
   required?: boolean
   minLength?: number
   placeholder?: string
@@ -35,6 +36,7 @@ export default function PasswordField({
   value,
   onChange,
   autoComplete,
+  name = 'password',
   required = false,
   minLength,
   placeholder,
@@ -48,6 +50,7 @@ export default function PasswordField({
       <span className="password-field">
         <input
           id={id}
+          name={name}
           type={visible ? 'text' : 'password'}
           autoComplete={autoComplete}
           value={value}

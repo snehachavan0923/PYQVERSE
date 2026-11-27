@@ -5,7 +5,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -19,6 +19,7 @@ from app.models.academic import (
     StudentSubjectEnrollment,
     Subject,
 )
+from app.models.analysis import AnalysisJob, AnalysisJobStatus
 from app.models.document import ExamType, PermissionStatus, QuestionPaper, UploadedDocument
 from app.models.question import DocumentPage, Question, QuestionOccurrence
 from app.models.resource import LearningResource, ResourceType
@@ -31,8 +32,10 @@ from app.services.content import (
     clean_text,
     safe_object_path,
     safe_original_filename,
+    validate_external_url,
     validate_file,
 )
+from app.services.pyq_analyzer import run_pyq_analysis_job
 
 router = APIRouter(tags=["content"])
 logger = logging.getLogger(__name__)
@@ -156,6 +159,11 @@ def _delete_pyq_core(db: Session, paper_id: uuid.UUID) -> dict:
         pages = db.scalars(select(DocumentPage).where(DocumentPage.document_id == document.id)).all()
         for p in pages:
             db.delete(p)
+
+        # Remove any analysis jobs for this paper
+        jobs = db.scalars(select(AnalysisJob).where(AnalysisJob.question_paper_id == paper.id)).all()
+        for j in jobs:
+            db.delete(j)
 
         storage_path = document.storage_path
         is_shared = _is_storage_path_shared(db, storage_path, exclude_upload_doc_id=document.id)
@@ -380,23 +388,40 @@ def _pyq_payload(paper: QuestionPaper, document: UploadedDocument, subject: Subj
     }
 
 
-def _resource_payload(resource: LearningResource, subject: Subject | None) -> dict:
+def _resource_payload(
+    resource: LearningResource,
+    subject: Subject | None,
+    unit: Unit | None = None,
+) -> dict:
     return {
         "id": str(resource.id),
         "subject_id": str(resource.subject_id),
         "subject_code": subject.code if subject else None,
         "subject_name": subject.name if subject else None,
+        "unit_id": str(resource.unit_id) if getattr(resource, "unit_id", None) else None,
+        "unit_number": unit.order_index if unit else None,
+        "unit_title": unit.title if unit else None,
         "title": resource.title,
         "description": resource.description,
         "resource_type": resource.resource_type,
+        "resource_source": getattr(resource, "resource_source", "FILE") or "FILE",
+        "external_url": getattr(resource, "external_url", None),
+        "link_title": getattr(resource, "link_title", None),
         "original_filename": resource.original_filename,
         "file_type": resource.file_type,
         "file_size": resource.file_size,
         "verification_status": resource.verification_status.value,
         "active": resource.active,
         "uploaded_at": _iso(resource.uploaded_at),
-        "uploaded_by": str(resource.uploaded_by),
+        "uploaded_by": str(resource.uploaded_by) if resource.uploaded_by else None,
     }
+
+
+def _units_map(db: Session, unit_ids: set[uuid.UUID]) -> dict[uuid.UUID, Unit]:
+    valid_ids = {u for u in unit_ids if u is not None}
+    if not valid_ids:
+        return {}
+    return {item.id: item for item in db.scalars(select(Unit).where(Unit.id.in_(valid_ids))).all()}
 
 
 def _subjects_map(db: Session, subject_ids: set[uuid.UUID]) -> dict[uuid.UUID, Subject]:
@@ -615,6 +640,7 @@ async def admin_upload_pyq(
     title: str | None = Form(default=None),
     description: str | None = Form(default=None),
     status: str = Form(default="DRAFT"),
+    background_tasks: BackgroundTasks = None,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -690,6 +716,24 @@ async def admin_upload_pyq(
         db.commit()
         db.refresh(document)
         db.refresh(paper)
+
+        # Trigger background automated AI analysis job
+        try:
+            analysis_job = AnalysisJob(
+                question_paper_id=paper.id,
+                uploaded_document_id=document.id,
+                status=AnalysisJobStatus.PENDING,
+                stage="Queued for automated AI analysis",
+                progress_percent=0,
+            )
+            db.add(analysis_job)
+            db.commit()
+            db.refresh(analysis_job)
+
+            if background_tasks is not None:
+                background_tasks.add_task(run_pyq_analysis_job, analysis_job.id)
+        except Exception as job_exc:
+            logger.warning("Could not initiate background analysis job: %s", job_exc)
     except IntegrityError as exc:
         db.rollback()
         _cleanup(path)
@@ -835,27 +879,51 @@ def admin_list_resources(
         statement = statement.where(LearningResource.resource_type == resource_type.upper())
     rows = db.scalars(statement.order_by(LearningResource.uploaded_at.desc())).all()
     subjects = _subjects_map(db, {row.subject_id for row in rows})
+    units = _units_map(db, {row.unit_id for row in rows if row.unit_id is not None})
     items = []
     for row in rows:
         subject = subjects.get(row.subject_id)
+        unit = units.get(row.unit_id)
         if search:
             needle = search.strip().lower()
             haystack = (
-                f"{row.title} {row.description or ''} {subject.code if subject else ''} "
+                f"{row.title} {row.description or ''} {getattr(row, 'link_title', '') or ''} "
+                f"{getattr(row, 'external_url', '') or ''} {subject.code if subject else ''} "
                 f"{subject.name if subject else ''}"
             ).lower()
             if needle not in haystack:
                 continue
-        items.append(_resource_payload(row, subject))
+        items.append(_resource_payload(row, subject, unit))
     return {"items": items, "total": len(items)}
+
+
+@router.get("/api/v1/admin/subjects/{subject_id}/units")
+def admin_list_subject_units(
+    subject_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    subject = db.get(Subject, subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    units = db.scalars(
+        select(Unit)
+        .where(Unit.subject_id == subject.id, Unit.active.is_(True))
+        .order_by(Unit.order_index)
+    ).all()
+    return [{"id": str(u.id), "title": u.title, "order_index": u.order_index} for u in units]
 
 
 @router.post("/api/v1/admin/resources", status_code=201)
 async def admin_upload_resource(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
     subject_id: uuid.UUID = Form(...),
     resource_type: str = Form(...),
     title: str = Form(...),
+    resource_source: str = Form(default="FILE"),
+    external_url: str | None = Form(default=None),
+    link_title: str | None = Form(default=None),
+    unit_id: uuid.UUID | None = Form(default=None),
     description: str | None = Form(default=None),
     status: str = Form(default="DRAFT"),
     admin: User = Depends(require_admin),
@@ -866,16 +934,53 @@ async def admin_upload_resource(
     normalized_type = (resource_type or "").strip().upper()
     if normalized_type not in RESOURCE_TYPES:
         raise HTTPException(status_code=422, detail="Invalid resource type")
-    publication = _status(status)
-    clean_title = clean_text(title, field="Title", max_length=300, required=True)
-    clean_description = clean_text(description, field="Description", max_length=4000)
 
-    data = await _read_upload(file)
-    extension, mime = validate_file(
-        category="resource", filename=file.filename, content_type=file.content_type, size=len(data)
-    )
-    path = safe_object_path("resource", scheme_id=scheme.id, subject_id=subject.id, extension=extension)
-    storage.upload_bytes(path, data, mime)
+    raw_source = str(resource_source) if isinstance(resource_source, str) else "FILE"
+    normalized_source = raw_source.strip().upper()
+    if normalized_source not in {"FILE", "LINK", "BOTH"}:
+        raise HTTPException(status_code=422, detail="Resource source must be FILE, LINK, or BOTH")
+
+    raw_status = str(status) if isinstance(status, str) else "DRAFT"
+    publication = _status(raw_status)
+    clean_title = clean_text(title, field="Title", max_length=300, required=True)
+    raw_desc = str(description) if isinstance(description, str) else None
+    clean_description = clean_text(raw_desc, field="Description", max_length=4000)
+    raw_link_title = str(link_title) if isinstance(link_title, str) else None
+    clean_link_title = clean_text(raw_link_title, field="Link title", max_length=300)
+
+    unit = None
+    raw_unit_id = unit_id if isinstance(unit_id, uuid.UUID) else None
+    if raw_unit_id is not None:
+        unit = db.get(Unit, raw_unit_id)
+        if unit is None or unit.subject_id != subject.id:
+            raise HTTPException(status_code=400, detail="Selected unit does not belong to this subject")
+
+    clean_url = None
+    raw_ext_url = str(external_url) if isinstance(external_url, str) else None
+    if normalized_source in {"LINK", "BOTH"}:
+        clean_url = validate_external_url(raw_ext_url, required=True)
+    elif raw_ext_url:
+        clean_url = validate_external_url(raw_ext_url, required=False)
+
+    has_file = file is not None and bool(file.filename and file.filename.strip())
+    if normalized_source in {"FILE", "BOTH"} and not has_file:
+        raise HTTPException(status_code=422, detail=f"A valid file is required when source is {normalized_source.capitalize()}")
+
+    path = None
+    extension = None
+    file_size = None
+    orig_name = None
+
+    if has_file and file is not None:
+        data = await _read_upload(file)
+        extension, mime = validate_file(
+            category="resource", filename=file.filename, content_type=file.content_type, size=len(data)
+        )
+        file_size = len(data)
+        orig_name = safe_original_filename(file.filename)
+        path = safe_object_path("resource", scheme_id=scheme.id, subject_id=subject.id, extension=extension)
+        storage.upload_bytes(path, data, mime)
+
     try:
         resource = LearningResource(
             title=clean_title,
@@ -883,11 +988,15 @@ async def admin_upload_resource(
             subject_id=subject.id,
             academic_scheme_id=scheme.id,
             semester_id=semester.id,
+            unit_id=unit.id if unit else None,
             resource_type=normalized_type,
+            resource_source=normalized_source,
+            external_url=clean_url,
+            link_title=clean_link_title,
             storage_path=path,
-            original_filename=safe_original_filename(file.filename),
+            original_filename=orig_name,
             file_type=extension,
-            file_size=len(data),
+            file_size=file_size,
             uploaded_by=admin.id,
             verification_status=publication,
             active=True,
@@ -897,9 +1006,10 @@ async def admin_upload_resource(
         db.refresh(resource)
     except Exception:
         db.rollback()
-        _cleanup(path)
+        if path:
+            _cleanup(path)
         raise
-    return _resource_payload(resource, subject)
+    return _resource_payload(resource, subject, unit)
 
 
 @router.patch("/api/v1/admin/resources/{resource_id}")
@@ -923,6 +1033,21 @@ def admin_update_resource(
         if normalized_type not in RESOURCE_TYPES:
             raise HTTPException(status_code=422, detail="Invalid resource type")
         resource.resource_type = normalized_type
+    if "external_url" in data:
+        resource.external_url = validate_external_url(data["external_url"], required=False)
+    if "link_title" in data:
+        resource.link_title = clean_text(data["link_title"], field="Link title", max_length=300)
+    if "resource_source" in data and data["resource_source"] is not None:
+        norm_source = str(data["resource_source"]).upper()
+        if norm_source in {"FILE", "LINK", "BOTH"}:
+            resource.resource_source = norm_source
+    if "unit_id" in data:
+        if data["unit_id"]:
+            unit = db.get(Unit, uuid.UUID(str(data["unit_id"])))
+            if unit and unit.subject_id == resource.subject_id:
+                resource.unit_id = unit.id
+        else:
+            resource.unit_id = None
     if "status" in data and data["status"] is not None:
         publication = _status(str(data["status"]))
         resource.verification_status = publication
@@ -933,7 +1058,9 @@ def admin_update_resource(
     resource.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(resource)
-    return _resource_payload(resource, db.get(Subject, resource.subject_id))
+    res_unit_id = getattr(resource, "unit_id", None)
+    unit = db.get(Unit, res_unit_id) if res_unit_id else None
+    return _resource_payload(resource, db.get(Subject, resource.subject_id), unit)
 
 
 def admin_archive_resource(
@@ -1186,7 +1313,9 @@ def student_list_resources(
     db: Session = Depends(get_db),
     search: str | None = None,
     subject_id: uuid.UUID | None = None,
+    unit_id: uuid.UUID | None = None,
     resource_type: str | None = None,
+    resource_source: str | None = None,
 ):
     profile = _student_profile(db, student)
     subject_ids = _enrolled_subject_ids(db, profile)
@@ -1200,22 +1329,29 @@ def student_list_resources(
     if subject_id:
         _require_enrolled(subject_ids, subject_id)
         statement = statement.where(LearningResource.subject_id == subject_id)
+    if unit_id:
+        statement = statement.where(LearningResource.unit_id == unit_id)
     if resource_type and resource_type.upper() in RESOURCE_TYPES:
         statement = statement.where(LearningResource.resource_type == resource_type.upper())
+    if resource_source and resource_source.upper() in {"FILE", "LINK", "BOTH"}:
+        statement = statement.where(LearningResource.resource_source == resource_source.upper())
     rows = db.scalars(statement.order_by(LearningResource.uploaded_at.desc())).all()
     subjects = _subjects_map(db, {row.subject_id for row in rows})
+    units = _units_map(db, {row.unit_id for row in rows if row.unit_id is not None})
     items = []
     for row in rows:
         subject = subjects.get(row.subject_id)
+        unit = units.get(row.unit_id)
         if search:
             needle = search.strip().lower()
             haystack = (
-                f"{row.title} {row.description or ''} {subject.code if subject else ''} "
+                f"{row.title} {row.description or ''} {getattr(row, 'link_title', '') or ''} "
+                f"{getattr(row, 'external_url', '') or ''} {subject.code if subject else ''} "
                 f"{subject.name if subject else ''}"
             ).lower()
             if needle not in haystack:
                 continue
-        items.append(_resource_payload(row, subject))
+        items.append(_resource_payload(row, subject, unit))
     return {"items": items, "total": len(items)}
 
 
@@ -1369,6 +1505,11 @@ def student_download(
         ):
             raise HTTPException(status_code=404, detail="Learning resource not found")
         _require_enrolled(subject_ids, resource.subject_id)
+        if not resource.storage_path:
+            raise HTTPException(
+                status_code=400,
+                detail="This resource is an external link and has no downloadable file",
+            )
         return _signed_download(
             resource.storage_path,
             resource.original_filename,
@@ -1411,6 +1552,11 @@ def admin_download(
         resource = db.get(LearningResource, content_id)
         if resource is None:
             raise HTTPException(status_code=404, detail="Learning resource not found")
+        if not resource.storage_path:
+            raise HTTPException(
+                status_code=400,
+                detail="This resource is an external link and has no downloadable file",
+            )
         return _signed_download(
             resource.storage_path,
             resource.original_filename,

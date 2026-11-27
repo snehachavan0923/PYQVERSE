@@ -53,7 +53,7 @@ export default function Onboarding() {
   }, [loadCatalog])
 
   useEffect(() => {
-    if (!form.branch_id) {
+    if (!form.branch_id || !form.academic_scheme_id || !form.semester_id) {
       setSubjects([])
       setElectiveError('')
       setElectivesLoading(false)
@@ -63,21 +63,32 @@ export default function Onboarding() {
     let cancelled = false
     setElectivesLoading(true)
     setElectiveError('')
-    api.get<SubjectOption[]>('/subjects', { params: { branch_id: form.branch_id } })
+
+    const queryParams = {
+      branch_id: form.branch_id,
+      scheme_id: form.academic_scheme_id,
+      semester_id: form.semester_id,
+    }
+
+    api.get<SubjectOption[]>('/academic/electives', { params: queryParams })
+      .catch(() => api.get<SubjectOption[]>('/subjects', { params: queryParams }))
       .then(({ data }) => {
         if (!cancelled) {
           setSubjects(data.filter((subject) => subject.subject_type === 'ELECTIVE'))
         }
       })
       .catch((err) => {
-        if (!cancelled) setElectiveError(friendlyError(err, 'Unable to load branch electives'))
+        if (!cancelled) {
+          setElectiveError(friendlyError(err, 'Unable to load elective subjects'))
+          setSubjects([])
+        }
       })
       .finally(() => {
         if (!cancelled) setElectivesLoading(false)
       })
 
     return () => { cancelled = true }
-  }, [form.branch_id])
+  }, [form.branch_id, form.academic_scheme_id, form.semester_id])
 
   const schemeSemesters = useMemo(
     () => semesters.filter((item) => !form.academic_scheme_id || item.academic_scheme_id === form.academic_scheme_id),
@@ -126,7 +137,32 @@ export default function Onboarding() {
             <label>Department<select value={form.branch_id} onChange={(event) => setForm({ ...form, branch_id: event.target.value, selected_elective_id: '' })} required><option value="">Select department</option>{branches.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <label>Academic scheme<select value={form.academic_scheme_id} onChange={(event) => setForm({ ...form, academic_scheme_id: event.target.value, semester_id: '', selected_elective_id: '' })} required><option value="">Select scheme</option>{schemes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <label>Current semester<select value={form.semester_id} onChange={(event) => setForm({ ...form, semester_id: event.target.value, selected_elective_id: '' })} required><option value="">Select semester</option>{schemeSemesters.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label>Selected elective (optional)<select value={form.selected_elective_id} onChange={(event) => setForm({ ...form, selected_elective_id: event.target.value })} disabled={!form.branch_id || electivesLoading}><option value="">No elective selected</option>{eligibleElectives.map((item) => <option key={item.id} value={item.id}>{item.code} — {item.name}</option>)}</select>{electiveError && <span className="form-error">{electiveError}</span>}</label>
+            <label>
+              Selected elective (optional)
+              <select
+                value={form.selected_elective_id}
+                onChange={(event) => setForm({ ...form, selected_elective_id: event.target.value })}
+                disabled={!form.branch_id || !form.academic_scheme_id || !form.semester_id || electivesLoading}
+              >
+                {electivesLoading ? (
+                  <option value="">Loading electives…</option>
+                ) : !form.branch_id || !form.academic_scheme_id || !form.semester_id ? (
+                  <option value="">Select department, scheme & semester first</option>
+                ) : eligibleElectives.length === 0 ? (
+                  <option value="">No electives available for this semester</option>
+                ) : (
+                  <>
+                    <option value="">No elective selected</option>
+                    {eligibleElectives.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.code} — {item.name}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
+              {electiveError && <span className="form-error" role="alert">{electiveError}</span>}
+            </label>
             <label>Enrollment year<input type="number" min="2020" max="2100" value={form.enrollment_year} onChange={(event) => setForm({ ...form, enrollment_year: Number(event.target.value) })} required /></label>
           </div>
           {error && <p className="form-error">{error}</p>}

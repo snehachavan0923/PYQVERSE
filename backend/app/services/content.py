@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
@@ -36,6 +37,36 @@ def clean_text(value: str | None, *, field: str, max_length: int, required: bool
     if len(normalized) > max_length:
         raise HTTPException(status_code=422, detail=f"{field} must be at most {max_length} characters")
     return normalized
+
+
+def validate_external_url(url: str | None, *, required: bool = False) -> str | None:
+    if url is None:
+        if required:
+            raise HTTPException(status_code=422, detail="Resource URL is required")
+        return None
+    trimmed = str(url).strip()
+    if not trimmed:
+        if required:
+            raise HTTPException(status_code=422, detail="Resource URL is required")
+        return None
+    if len(trimmed) > 2000:
+        raise HTTPException(status_code=422, detail="Resource URL must be at most 2000 characters")
+    parsed = urlparse(trimmed)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise HTTPException(status_code=422, detail="Resource URL must use http or https scheme")
+    if not parsed.netloc:
+        raise HTTPException(status_code=422, detail="Resource URL must include a valid domain")
+    import ipaddress
+    host = parsed.netloc.split(":")[0].strip().lower()
+    if host in {"localhost", "::1"}:
+        raise HTTPException(status_code=422, detail="Resource URL cannot point to internal network hosts")
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise HTTPException(status_code=422, detail="Resource URL cannot point to internal network hosts")
+    except ValueError:
+        pass
+    return trimmed
 
 
 def validate_file(*, category: str, filename: str | None, content_type: str | None, size: int) -> tuple[str, str]:

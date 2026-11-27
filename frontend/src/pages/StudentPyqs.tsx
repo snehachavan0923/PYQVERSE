@@ -206,7 +206,7 @@ export default function StudentPyqs() {
                 <div className="paper-card-actions">
                   <ContentActions
                     withLabels
-                    label={title}
+                    label={title || 'Question Paper'}
                     busy={busy?.id === paper.id}
                     onView={() => void view(paper)}
                     onDownload={() => void download(paper)}

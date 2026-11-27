@@ -711,6 +711,186 @@ input[type='file']::file-selector-button:hover {
   font-weight: 500;
 }
 
+/* ---------- Auth Method Selector & OTP ---------- */
+
+.auth-method-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 18px 0 12px;
+}
+
+.auth-method-button {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--transition),
+    color var(--transition),
+    box-shadow var(--transition);
+  text-align: center;
+}
+
+.auth-method-button:hover {
+  color: var(--text);
+}
+
+.auth-method-button.active {
+  background: var(--surface-elevated);
+  color: var(--primary-soft);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-strong);
+}
+
+.otp-confirmation-banner {
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin: 6px 0 18px;
+  text-align: left;
+}
+
+.otp-confirmation-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--primary-soft);
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.otp-confirmation-icon {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+
+.otp-confirmation-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.otp-confirmation-target {
+  color: var(--text);
+  font-family: monospace;
+}
+
+.otp-masked-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 14px;
+  padding: 6px 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text);
+  font-family: monospace;
+}
+
+.otp-input-group {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 12px 0 18px;
+}
+
+.otp-digit-input {
+  width: 48px;
+  height: 56px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 700;
+  font-family: monospace;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  transition:
+    border-color var(--transition),
+    box-shadow var(--transition);
+}
+
+.otp-digit-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.otp-digit-input.otp-digit-error {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.2);
+}
+
+.otp-resend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.otp-resend-btn {
+  background: transparent;
+  border: none;
+  color: var(--primary);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color var(--transition);
+}
+
+.otp-resend-btn:hover:not(:disabled) {
+  color: var(--primary-hover);
+}
+
+.otp-resend-btn:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.otp-back-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 0;
+  transition: color var(--transition);
+}
+
+.otp-back-btn:hover {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 420px) {
+  .otp-digit-input {
+    width: 40px;
+    height: 48px;
+    font-size: 20px;
+  }
+  .otp-input-group {
+    gap: 6px;
+  }
+}
+
 .auth-card > .muted:last-child {
   margin-top: 18px;
   font-size: 13px;
@@ -2013,6 +2193,52 @@ input[type='file']::file-selector-button:hover {
   gap: 8px;
 }
 
+.delete-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.delete-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.delete-modal-field {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.delete-warning-banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  background: rgba(251, 113, 133, 0.08);
+  border: 1px solid rgba(251, 113, 133, 0.28);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.45;
+  margin-top: 4px;
+}
+
+.delete-warning-banner p {
+  margin: 0;
+  color: var(--text);
+}
+
+.delete-warning-banner strong {
+  color: var(--danger);
+}
+
 /* ---------- Question paper cards ---------- */
 
 .paper-list {
@@ -2647,3 +2873,183 @@ input[type='file']::file-selector-button:hover {
     scroll-behavior: auto !important;
   }
 }
+
+/* =========================================================
+   Learning Resource Sources (File, Link, Both) & Previews
+   ========================================================= */
+
+.source-selector {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+@media (max-width: 640px) {
+  .source-selector {
+    grid-template-columns: 1fr;
+  }
+}
+
+.source-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition);
+  text-align: left;
+}
+
+.source-card:hover {
+  border-color: var(--primary);
+  background: var(--surface-elevated);
+  color: var(--text);
+}
+
+.source-card.active {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface-elevated));
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.source-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13.5px;
+  color: inherit;
+}
+
+.source-card-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.source-card.active .source-card-desc {
+  color: var(--text-secondary);
+}
+
+.resource-url-preview {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-elevated) 85%, transparent);
+  border: 1px solid var(--border-strong);
+  margin-top: 8px;
+  align-items: center;
+}
+
+.resource-yt-thumb {
+  position: relative;
+  width: 108px;
+  height: 60px;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #000;
+}
+
+.resource-yt-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.resource-play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+}
+
+.resource-url-preview-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.resource-url-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.badge-youtube {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.badge-web {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+.tag-source-file {
+  background: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.tag-source-link {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.tag-source-both {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.resource-item-with-thumb {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.resource-card-thumb {
+  width: 96px;
+  height: 58px;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+}
+
+.resource-card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.resource-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+

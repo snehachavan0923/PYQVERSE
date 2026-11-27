@@ -3,11 +3,14 @@ import { useAuth } from '../context/AuthContext'
 import { errorDetail } from '../services/authApi'
 import {
   archiveAdminContent,
+  deleteAdminContent,
   listAdminContent,
+  listAdminUnits,
   openAdminDownload,
   openAdminPreview,
   updateAdminContent,
   uploadAdminContent,
+  type AdminUnitItem,
   type ContentKind,
 } from '../services/contentApi'
 import notifications from '../services/notification'
@@ -29,6 +32,12 @@ import {
   openPreviewWindow,
   triggerDownload,
 } from '../utils/documentActions'
+import {
+  detectResourceSource,
+  getDomain,
+  isValidHttpUrl,
+  parseYouTubeUrl,
+} from '../utils/resourceUtils'
 
 type ContentItem = SyllabusDocumentItem | QuestionPaperItem | LearningResourceItem
 
@@ -68,7 +77,7 @@ const PAGE_COPY: Record<ContentKind, { eyebrow: string; title: string; descripti
   resource: {
     eyebrow: 'Learning resources',
     title: 'Learning resources',
-    description: 'Publish notes, study material and reference documents for the enrolled academic subjects.',
+    description: 'Publish notes, study material, video links and reference documents for the enrolled academic subjects.',
   },
 }
 
@@ -93,7 +102,7 @@ const UPLOAD_COPY: Record<ContentKind, { title: string; description: string; man
   },
   resource: {
     title: 'Upload Learning Resource',
-    description: 'Add notes or reference material for an active subject and control student access.',
+    description: 'Add notes, study material, or external links for an active subject and control student access.',
     manage: 'learning resources',
   },
 }
@@ -102,6 +111,10 @@ interface UploadFormState {
   subject_id: string
   status: string
   file: File | null
+  resource_source: 'FILE' | 'LINK' | 'BOTH'
+  external_url: string
+  link_title: string
+  unit_id: string
   version: string
   title: string
   description: string
@@ -116,6 +129,10 @@ function emptyUploadForm(): UploadFormState {
     subject_id: '',
     status: 'DRAFT',
     file: null,
+    resource_source: 'FILE',
+    external_url: '',
+    link_title: '',
+    unit_id: '',
     version: '',
     title: '',
     description: '',
@@ -136,6 +153,29 @@ function UploadIcon() {
   )
 }
 
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      <line x1="10" x2="10" y1="11" y2="17" />
+      <line x1="14" x2="14" y1="11" y2="17" />
+    </svg>
+  )
+}
+
+function contentTypeLabel(kind: ContentKind): string {
+  switch (kind) {
+    case 'pyq':
+      return 'Previous Year Question Paper (PYQ)'
+    case 'syllabus':
+      return 'Syllabus Document'
+    case 'resource':
+      return 'Learning Resource'
+  }
+}
+
 function stateTags(status: string, active: boolean) {
   if (!active) {
     return (
@@ -152,8 +192,8 @@ function stateTags(status: string, active: boolean) {
   return <span className="tag tag-draft">{status}</span>
 }
 
-function titleOf(item: ContentItem) {
-  return item.title || item.original_filename
+function titleOf(item: ContentItem): string {
+  return item.title || item.original_filename || 'Untitled document'
 }
 
 function isPyq(item: ContentItem): item is QuestionPaperItem {
@@ -183,10 +223,13 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   const [filterSubjectId, setFilterSubjectId] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterArchive, setFilterArchive] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<ContentItem | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const activeSubjects = useMemo(() => subjects.filter((item) => item.active), [subjects])
 
   const [uploadForm, setUploadForm] = useState<UploadFormState>(emptyUploadForm)
+  const [units, setUnits] = useState<AdminUnitItem[]>([])
   const [editForm, setEditForm] = useState({
     title: '',
     description: '',
@@ -211,6 +254,16 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
       setUploadForm((current) => ({ ...current, subject_id: activeSubjects[0].id }))
     }
   }, [activeSubjects, uploadForm.subject_id])
+
+  useEffect(() => {
+    if (kind === 'resource' && uploadForm.subject_id) {
+      listAdminUnits(session, uploadForm.subject_id)
+        .then(setUnits)
+        .catch(() => setUnits([]))
+    } else {
+      setUnits([])
+    }
+  }, [kind, session, uploadForm.subject_id])
 
   useEffect(() => {
     if (uploadError) uploadErrorRef.current?.scrollIntoView?.({ block: 'nearest' })
@@ -264,28 +317,58 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
   const submitUpload = async (event: FormEvent) => {
     event.preventDefault()
     if (savingRef.current) return
-    const file = uploadForm.file
-    if (!file) {
-      setUploadError('Select a file to upload.')
-      return
-    }
-    if (file.size > MAX_FILE_BYTES) {
-      setUploadError('The maximum file size is 20 MB.')
-      return
-    }
+
     const subject = activeSubjects.find((item) => item.id === uploadForm.subject_id)
     if (!subject) {
       setUploadError('Select a valid active subject.')
       return
     }
+
+    const file = uploadForm.file
+    const source = uploadForm.resource_source
+
+    if (kind === 'resource') {
+      if (source === 'FILE' || source === 'BOTH') {
+        if (!file) {
+          setUploadError('Select a file to upload.')
+          return
+        }
+        if (file.size > MAX_FILE_BYTES) {
+          setUploadError('The maximum file size is 20 MB.')
+          return
+        }
+      }
+      if (source === 'LINK' || source === 'BOTH') {
+        const url = uploadForm.external_url.trim()
+        if (!url) {
+          setUploadError('Enter a valid resource URL.')
+          return
+        }
+        if (!isValidHttpUrl(url)) {
+          setUploadError('Please enter a valid HTTP or HTTPS URL (e.g. https://...).')
+          return
+        }
+      }
+      if (!uploadForm.title.trim()) {
+        setUploadError('Add a title for the learning resource.')
+        return
+      }
+    } else {
+      if (!file) {
+        setUploadError('Select a file to upload.')
+        return
+      }
+      if (file.size > MAX_FILE_BYTES) {
+        setUploadError('The maximum file size is 20 MB.')
+        return
+      }
+    }
+
     if (kind === 'syllabus' && !uploadForm.version.trim()) {
       setUploadError('Add a syllabus version.')
       return
     }
-    if (kind === 'resource' && !uploadForm.title.trim()) {
-      setUploadError('Add a title for the learning resource.')
-      return
-    }
+
     if (kind === 'pyq') {
       const year = Number(uploadForm.examination_year)
       if (!Number.isInteger(year) || year < 2000 || year > 2100) {
@@ -306,7 +389,20 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
         uploadAdminContent(session, kind, {
           subject_id: uploadForm.subject_id,
           status: uploadForm.status,
-          file,
+          file: (kind !== 'resource' || source === 'FILE' || source === 'BOTH') ? file : null,
+          resource_source: kind === 'resource' ? uploadForm.resource_source : undefined,
+          external_url:
+            kind === 'resource' && (source === 'LINK' || source === 'BOTH')
+              ? uploadForm.external_url.trim()
+              : undefined,
+          link_title:
+            kind === 'resource' && uploadForm.link_title.trim()
+              ? uploadForm.link_title.trim()
+              : undefined,
+          unit_id:
+            kind === 'resource' && uploadForm.unit_id
+              ? uploadForm.unit_id
+              : undefined,
           version: kind === 'syllabus' ? uploadForm.version.trim() : undefined,
           title: uploadForm.title.trim() || undefined,
           description: uploadForm.description.trim() || undefined,
@@ -393,6 +489,21 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
       await run(() => archiveAdminContent(session, kind, item.id), 'Content archived')
     } else {
       await run(() => updateAdminContent(session, kind, item.id, { active: true }), 'Content restored')
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return
+    setDeleting(true)
+    try {
+      await deleteAdminContent(session, kind, deleteTarget.id)
+      setItems((prev) => (prev ? prev.filter((i) => i.id !== deleteTarget.id) : null))
+      setDeleteTarget(null)
+      void notifications.toast('success', 'Content deleted successfully')
+    } catch (err) {
+      void notifications.error('Deletion failed', errorDetail(err, 'Failed to delete the selected content'))
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -684,6 +795,57 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
             </div>
           )}
           {kind === 'resource' && (
+            <div className="source-selector-container">
+              <label className="field-label" style={{ marginBottom: '6px', display: 'block', fontWeight: 500 }}>
+                Resource Source
+              </label>
+              <div className="source-selector" role="radiogroup" aria-label="Resource Source">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-label="File Upload"
+                  aria-checked={uploadForm.resource_source === 'FILE'}
+                  className={`source-card${uploadForm.resource_source === 'FILE' ? ' active' : ''}`}
+                  onClick={() => updateUploadForm({ resource_source: 'FILE' })}
+                >
+                  <div className="source-card-title">
+                    <span>📄</span>
+                    <span>File Upload</span>
+                  </div>
+                  <span className="source-card-desc">PDF or DOCX document (up to 20 MB)</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-label="External Link"
+                  aria-checked={uploadForm.resource_source === 'LINK'}
+                  className={`source-card${uploadForm.resource_source === 'LINK' ? ' active' : ''}`}
+                  onClick={() => updateUploadForm({ resource_source: 'LINK' })}
+                >
+                  <div className="source-card-title">
+                    <span>🔗</span>
+                    <span>External Link</span>
+                  </div>
+                  <span className="source-card-desc">YouTube video, playlist or website</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-label="Both"
+                  aria-checked={uploadForm.resource_source === 'BOTH'}
+                  className={`source-card${uploadForm.resource_source === 'BOTH' ? ' active' : ''}`}
+                  onClick={() => updateUploadForm({ resource_source: 'BOTH' })}
+                >
+                  <div className="source-card-title">
+                    <span>📄+🔗</span>
+                    <span>Both</span>
+                  </div>
+                  <span className="source-card-desc">Document with attached external link</span>
+                </button>
+              </div>
+            </div>
+          )}
+          {kind === 'resource' && (
             <label>
               Resource type
               <select
@@ -696,12 +858,29 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
               </select>
             </label>
           )}
+          {kind === 'resource' && units.length > 0 && (
+            <label>
+              Unit / Topic (optional)
+              <select
+                value={uploadForm.unit_id}
+                onChange={(event) => updateUploadForm({ unit_id: event.target.value })}
+              >
+                <option value="">Select unit (optional)</option>
+                {units.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    Unit {u.order_index}: {u.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label>
-            Title (optional)
+            Title {kind === 'resource' ? '(required)' : '(optional)'}
             <input
               value={uploadForm.title}
               onChange={(event) => updateUploadForm({ title: event.target.value })}
               maxLength={300}
+              required={kind === 'resource'}
             />
           </label>
           <label>
@@ -713,15 +892,88 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
               maxLength={4000}
             />
           </label>
-          <label>
-            File
-            <input
-              type="file"
-              accept={ACCEPT[kind]}
-              onChange={(event) => updateUploadForm({ file: event.target.files?.[0] ?? null })}
-              required
-            />
-          </label>
+          {kind === 'resource' && (uploadForm.resource_source === 'LINK' || uploadForm.resource_source === 'BOTH') && (
+            <>
+              <label>
+                Resource URL
+                <input
+                  type="url"
+                  placeholder="https://www.youtube.com/watch?v=... or https://..."
+                  value={uploadForm.external_url}
+                  onChange={(event) => updateUploadForm({ external_url: event.target.value })}
+                  required
+                />
+              </label>
+
+              {uploadForm.external_url.trim() && (() => {
+                const yt = parseYouTubeUrl(uploadForm.external_url)
+                const isHttp = isValidHttpUrl(uploadForm.external_url)
+                if (yt.isYouTube) {
+                  return (
+                    <div className="resource-url-preview">
+                      {yt.thumbnailUrl && (
+                        <div className="resource-yt-thumb">
+                          <img src={yt.thumbnailUrl} alt="YouTube thumbnail" />
+                          <div className="resource-play-overlay">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                              <polygon points="5 3 19 12 5 21 5 3" />
+                            </svg>
+                          </div>
+                        </div>
+                      )}
+                      <div className="resource-url-preview-info">
+                        <span className="resource-url-badge badge-youtube">
+                          {yt.isPlaylist ? '📑 YouTube Playlist' : '▶ YouTube Video'}
+                        </span>
+                        <span className="mono-text" style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                          {yt.videoId ? `Video ID: ${yt.videoId}` : `Playlist ID: ${yt.playlistId}`}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                }
+                if (isHttp) {
+                  return (
+                    <div className="resource-url-preview">
+                      <div className="resource-url-preview-info">
+                        <span className="resource-url-badge badge-web">🌐 Educational Website</span>
+                        <strong style={{ fontSize: '13px', color: 'var(--text)' }}>{getDomain(uploadForm.external_url)}</strong>
+                        <span className="mono-text" style={{ fontSize: '11px', color: 'var(--muted)', overflowWrap: 'anywhere' }}>
+                          {uploadForm.external_url}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                }
+                return (
+                  <p className="form-hint" style={{ color: 'var(--warning)' }}>
+                    Please enter a valid URL beginning with http:// or https://
+                  </p>
+                )
+              })()}
+
+              <label>
+                Link title (optional)
+                <input
+                  value={uploadForm.link_title}
+                  onChange={(event) => updateUploadForm({ link_title: event.target.value })}
+                  placeholder="e.g. Official Lecture Video / Course Documentation"
+                  maxLength={300}
+                />
+              </label>
+            </>
+          )}
+          {(kind !== 'resource' || uploadForm.resource_source === 'FILE' || uploadForm.resource_source === 'BOTH') && (
+            <label>
+              File
+              <input
+                type="file"
+                accept={ACCEPT[kind]}
+                onChange={(event) => updateUploadForm({ file: event.target.files?.[0] ?? null })}
+                required
+              />
+            </label>
+          )}
           <label>
             Publication status
             <select
@@ -733,8 +985,68 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
               ))}
             </select>
           </label>
-          <p className="form-hint">Accepted files: PDF{kind === 'pyq' ? '' : ' or DOCX'}. Maximum size: 20 MB.</p>
+          <p className="form-hint">
+            {kind === 'resource' && uploadForm.resource_source === 'LINK'
+              ? 'External link: YouTube video, playlist or educational site URL.'
+              : `Accepted files: PDF${kind === 'pyq' ? '' : ' or DOCX'}. Maximum size: 20 MB.`}
+          </p>
         </form>
+      </Modal>
+
+      <Modal
+        open={Boolean(deleteTarget)}
+        title="Confirm Permanent Deletion"
+        description="This action cannot be undone. Please confirm before proceeding."
+        busy={deleting}
+        onClose={() => !deleting && setDeleteTarget(null)}
+        footer={
+          <>
+            <button
+              className="secondary-button compact-button"
+              type="button"
+              disabled={deleting}
+              onClick={() => setDeleteTarget(null)}
+              data-autofocus
+            >
+              Cancel
+            </button>
+            <button
+              className="danger-button compact-button"
+              type="button"
+              disabled={deleting}
+              onClick={() => void confirmDelete()}
+            >
+              {deleting ? 'Deleting…' : 'Confirm Delete'}
+            </button>
+          </>
+        }
+      >
+        {deleteTarget && (
+          <div className="delete-modal-content">
+            <div className="delete-modal-field">
+              <span className="muted">Document name:</span>
+              <strong>{titleOf(deleteTarget)}</strong>
+            </div>
+            <div className="delete-modal-field">
+              <span className="muted">Content type:</span>
+              <span>{contentTypeLabel(kind)}</span>
+            </div>
+            <div className="delete-modal-field">
+              <span className="muted">Filename / Link:</span>
+              <span className="mono-text">{deleteTarget.original_filename || deleteTarget.external_url || 'No file attached'}</span>
+            </div>
+            <div className="delete-warning-banner" role="alert">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              <p>
+                <strong>Warning:</strong> Deleting this content removes its stored file and database record permanently. This may affect student access to enrolled academic materials for this subject.
+              </p>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {error && <ErrorState message={error} onRetry={load} />}
@@ -743,22 +1055,52 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
         <div className="content-list">
           {filtered.map((item) => {
             const active = item.active !== false
+            const isRes = isResource(item)
+            const source = isRes ? detectResourceSource(item) : 'FILE'
+            const hasFile = isRes
+              ? (source === 'FILE' || source === 'BOTH' || Boolean(item.file_size))
+              : true
+            const yt = isRes && item.external_url ? parseYouTubeUrl(item.external_url) : null
+
             return (
               <article className="content-item" key={item.id}>
                 <div className="content-item-main">
-                  <strong>{titleOf(item)}</strong>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <strong>{titleOf(item)}</strong>
+                    {isRes && (
+                      <span className={`tag tag-source-${source.toLowerCase()}`}>
+                        {source === 'FILE' ? '📄 File' : source === 'LINK' ? '🔗 Link' : '📄+🔗 File & Link'}
+                      </span>
+                    )}
+                  </div>
                   <p>
                     {item.subject_code ?? 'Subject removed'} — {item.subject_name ?? 'Unknown subject'}
                     {isPyq(item)
                       ? ` · ${item.exam_type}${item.cie_number ? ` ${item.cie_number}` : ''} · ${item.examination_year ?? 'Year not set'}`
                       : ''}
-                    {isResource(item) ? ` · ${item.resource_type.replaceAll('_', ' ')}` : ''}
-                    {!isPyq(item) && !isResource(item) && item.version ? ` · Version ${item.version}` : ''}
+                    {isRes ? ` · ${item.resource_type.replaceAll('_', ' ')}` : ''}
+                    {isRes && item.unit_title ? ` · Unit ${item.unit_number ?? ''}: ${item.unit_title}` : ''}
+                    {!isPyq(item) && !isRes && item.version ? ` · Version ${item.version}` : ''}
                   </p>
+                  {isRes && item.description && <p style={{ color: 'var(--text-secondary)' }}>{item.description}</p>}
+                  {isRes && item.external_url && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', marginTop: '2px' }}>
+                      <span style={{ color: 'var(--muted)' }}>URL:</span>
+                      <a
+                        href={item.external_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: 'var(--primary)', textDecoration: 'underline', overflowWrap: 'anywhere' }}
+                      >
+                        {item.link_title || item.external_url}
+                      </a>
+                    </div>
+                  )}
                   <div className="content-meta">
                     {stateTags(item.verification_status, active)}
-                    <span>{item.file_type.toUpperCase()}</span>
-                    <span>{item.original_filename}</span>
+                    {hasFile && item.file_type && <span>{item.file_type.toUpperCase()}</span>}
+                    {hasFile && item.original_filename && <span>{item.original_filename}</span>}
+                    {isRes && !hasFile && <span>External Link Only</span>}
                   </div>
                 </div>
                 <div className="content-item-side">
@@ -776,14 +1118,26 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
                     <button className="secondary-button compact-button" type="button" onClick={() => startEdit(item)}>
                       Edit
                     </button>
-                    <ContentActions
-                      label={titleOf(item)}
-                      busy={busy?.id === item.id}
-                      viewDisabled={!isPdfFile(item.file_type)}
-                      viewHint={isPdfFile(item.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
-                      onView={() => void view(item)}
-                      onDownload={() => void download(item)}
-                    />
+                    {isRes && item.external_url && (
+                      <a
+                        className="secondary-button compact-button resource-link-btn"
+                        href={item.external_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {yt?.isYouTube ? '▶ Watch Video' : '↗ Open Link'}
+                      </a>
+                    )}
+                    {hasFile && (
+                      <ContentActions
+                        label={titleOf(item)}
+                        busy={busy?.id === item.id}
+                        viewDisabled={!isPdfFile(item.file_type || '')}
+                        viewHint={isPdfFile(item.file_type || '') ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                        onView={() => void view(item)}
+                        onDownload={() => void download(item)}
+                      />
+                    )}
                     <button
                       className={active ? 'danger-button compact-button' : 'secondary-button compact-button'}
                       type="button"
@@ -791,6 +1145,16 @@ export default function AdminContentManager({ kind }: AdminContentManagerProps) 
                       onClick={() => void toggleActive(item)}
                     >
                       {active ? 'Archive' : 'Restore'}
+                    </button>
+                    <button
+                      className="danger-button compact-button delete-action-btn"
+                      type="button"
+                      aria-label={`Delete ${titleOf(item)}`}
+                      disabled={saving || (deleting && deleteTarget?.id === item.id)}
+                      onClick={() => setDeleteTarget(item)}
+                    >
+                      <TrashIcon />
+                      <span>Delete</span>
                     </button>
                   </div>
                 </div>

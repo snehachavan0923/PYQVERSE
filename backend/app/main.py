@@ -8,6 +8,7 @@ from sqlalchemy.exc import ProgrammingError
 from app.api.routes import router as api_router
 from app.api.auth_routes import router as auth_router
 from app.api.admin_academic_routes import router as admin_academic_router
+from app.api.analysis_routes import router as analysis_router
 from app.api.content_routes import router as content_router
 from app.core.config import settings
 
@@ -37,6 +38,7 @@ app.include_router(api_router)
 app.include_router(auth_router)
 app.include_router(admin_academic_router)
 app.include_router(content_router)
+app.include_router(analysis_router)
 
 
 @app.exception_handler(Exception)

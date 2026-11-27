@@ -121,17 +121,17 @@ export default function StudentSyllabus() {
                 <p>{document.subject_code} — {document.subject_name}</p>
                 <div className="content-meta">
                   <span>Version {document.version}</span>
-                  <span>{document.file_type.toUpperCase()}</span>
+                  <span>{(document.file_type || '').toUpperCase()}</span>
                   <span className="tag tag-published">Published</span>
                 </div>
               </div>
               <div className="content-item-side">
                 <ContentActions
                   withLabels
-                  label={document.original_filename}
+                  label={document.original_filename || 'Syllabus'}
                   busy={busy?.id === document.id}
-                  viewDisabled={!isPdfFile(document.file_type)}
-                  viewHint={isPdfFile(document.file_type) ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
+                  viewDisabled={!isPdfFile(document.file_type || '')}
+                  viewHint={isPdfFile(document.file_type || '') ? 'View PDF in a new tab' : 'Preview is available for PDF documents only'}
                   onView={() => void view(document)}
                   onDownload={() => void download(document)}
                 />

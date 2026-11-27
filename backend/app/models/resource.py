@@ -18,6 +18,12 @@ class ResourceType(str, enum.Enum):
     OTHER = "OTHER"
 
 
+class ResourceSource(str, enum.Enum):
+    FILE = "FILE"
+    LINK = "LINK"
+    BOTH = "BOTH"
+
+
 class LearningResource(Base):
     __tablename__ = "learning_resources"
     __table_args__ = (
@@ -25,8 +31,13 @@ class LearningResource(Base):
             "resource_type IN ('NOTES','STUDY_MATERIAL','REFERENCE','IMPORTANT_QUESTIONS','OTHER')",
             name="ck_learning_resource_type",
         ),
+        CheckConstraint(
+            "resource_source IN ('FILE','LINK','BOTH')",
+            name="ck_learning_resource_source",
+        ),
         Index("ix_learning_resources_subject", "subject_id"),
         Index("ix_learning_resources_subject_status", "subject_id", "verification_status"),
+        Index("ix_learning_resources_unit", "unit_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -39,11 +50,15 @@ class LearningResource(Base):
     semester_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("semesters.id", ondelete="CASCADE"), nullable=False
     )
+    unit_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("units.id", ondelete="SET NULL"), nullable=True)
     resource_type: Mapped[str] = mapped_column(String(30), nullable=False, default=ResourceType.NOTES.value)
-    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
-    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    file_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    resource_source: Mapped[str] = mapped_column(String(20), nullable=False, default=ResourceSource.FILE.value, server_default=text("'FILE'"))
+    external_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    link_title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("CURRENT_TIMESTAMP"))
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("CURRENT_TIMESTAMP"))

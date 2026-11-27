@@ -22,6 +22,8 @@ import AdminProfile from '../pages/AdminProfile'
 import AdminSettings from '../pages/AdminSettings'
 import AdminContentManager from '../pages/AdminContentManager'
 import AdminUploads from '../pages/AdminUploads'
+import AdminAnalysis from '../pages/AdminAnalysis'
+import StudentPyqInsights from '../pages/StudentPyqInsights'
 import { useAuth } from '../context/AuthContext'
 import { ErrorState } from '../components/PageState'
 
@@ -56,6 +58,7 @@ export default function AppRoutes() {
           <Route path="/student/subjects/:subjectId" element={<StudentSubjectDetail />} />
           <Route path="/student/syllabus" element={<StudentSyllabus />} />
           <Route path="/student/pyqs" element={<StudentPyqs />} />
+          <Route path="/student/insights" element={<StudentPyqInsights />} />
           <Route path="/student/resources" element={<StudentResources />} />
           <Route path="/student/profile" element={<StudentProfile />} />
           <Route path="/student/settings" element={<StudentSettings />} />
@@ -69,6 +72,7 @@ export default function AppRoutes() {
           <Route path="/admin/users" element={<AdminUsers />} />
           <Route path="/admin/syllabus" element={<AdminContentManager kind="syllabus" />} />
           <Route path="/admin/pyqs" element={<AdminContentManager kind="pyq" />} />
+          <Route path="/admin/analysis" element={<AdminAnalysis />} />
           <Route path="/admin/resources" element={<AdminContentManager kind="resource" />} />
           <Route path="/admin/uploads" element={<AdminUploads />} />
           <Route path="/admin/profile" element={<AdminProfile />} />
